@@ -11,14 +11,14 @@ st.set_page_config(page_title="Kuwaiti Lingo", page_icon="🇰🇼", layout="cen
 
 # --- Database & Setup ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress_v2.db" # Updated to v2 to prevent schema crashes
+DB_NAME = "learning_progress_v3.db" # Updated to v3 for the new Chapter-based structure
 
 # Initialize SQLite Database to save scores permanently
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS vocab 
-                 (id TEXT PRIMARY KEY, level TEXT, chapter TEXT, arabic TEXT, 
+                 (id TEXT PRIMARY KEY, chapter TEXT, arabic TEXT, 
                   pronunciation TEXT, english TEXT, letter_pronunc TEXT, letter_eng TEXT, score INTEGER)''')
     conn.commit()
     return conn
@@ -30,6 +30,10 @@ def fetch_sheet_data(url):
 
 def sync_data(conn, df):
     c = conn.cursor()
+    
+    # Strip invisible whitespace from column names just in case
+    df.columns = df.columns.str.strip()
+    
     for _, row in df.iterrows():
         # Skip empty rows safely
         arabic_text = str(row.get('Arabic Script', ''))
@@ -42,16 +46,15 @@ def sync_data(conn, df):
         # Check if word exists in DB
         c.execute("SELECT id FROM vocab WHERE id=?", (word_id,))
         if not c.fetchone():
-            c.execute('''INSERT INTO vocab (id, level, chapter, arabic, pronunciation, english, letter_pronunc, letter_eng, score)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+            c.execute('''INSERT INTO vocab (id, chapter, arabic, pronunciation, english, letter_pronunc, letter_eng, score)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
                       (word_id, 
-                       str(row.get('Level', '')), 
                        str(row.get('Chapter', '')), 
                        arabic_text, 
                        str(row.get('Pronunciation', '')), 
                        str(row.get('English Meaning', '')), 
-                       str(row.get('letterwise pronounciation', '')), 
-                       str(row.get('letterwise english', '')), 
+                       str(row.get('Letter-wise pronounciation', '')), 
+                       str(row.get('Letter-wise English', '')), 
                        0))
     conn.commit()
 
@@ -61,10 +64,10 @@ if "show_meaning" not in st.session_state:
 if "current_word" not in st.session_state:
     st.session_state.current_word = None
 
-def get_next_word(conn, level):
+def get_next_word(conn, chapter):
     c = conn.cursor()
     # Fetch words that haven't been mastered yet (score < 3)
-    c.execute("SELECT * FROM vocab WHERE level=? AND score < 3", (level,))
+    c.execute("SELECT * FROM vocab WHERE chapter=? AND score < 3", (chapter,))
     words = c.fetchall()
     
     if not words:
@@ -88,33 +91,36 @@ st.title("🇰🇼 Learn Kuwaiti Arabic")
 conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
+    # Strip whitespace from headers to ensure match
+    df.columns = df.columns.str.strip()
     
-    # Failsafe: Ensure 'Level' column exists to prevent KeyError
-    if 'Level' not in df.columns:
-        st.error("🚨 Critical Error: Could not find the 'Level' column in your Google Sheet. Please check your spelling and spacing in Row 1.")
+    # Failsafe: Ensure 'Chapter' column exists
+    if 'Chapter' not in df.columns:
+        st.error("🚨 Critical Error: Could not find the 'Chapter' column in your Google Sheet.")
+        st.write("Found these columns instead:", list(df.columns))
         st.stop()
         
     sync_data(conn, df)
 except Exception as e:
     st.error(f"Error reading Google Sheet: {e}")
 
-# Navigation
+# Navigation (Now based on Chapters instead of Levels)
 st.sidebar.header("Navigation")
-levels = [row[0] for row in conn.cursor().execute("SELECT DISTINCT level FROM vocab WHERE level != 'nan' AND level != ''").fetchall()]
+chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != 'nan' AND chapter != ''").fetchall()]
 
-if levels:
-    selected_level = st.sidebar.selectbox("Choose your Level", levels)
+if chapters:
+    selected_chapter = st.sidebar.selectbox("Choose your Chapter", chapters)
     
-    if "last_level" not in st.session_state or st.session_state.last_level != selected_level:
-        st.session_state.last_level = selected_level
-        get_next_word(conn, selected_level)
+    if "last_chapter" not in st.session_state or st.session_state.last_chapter != selected_chapter:
+        st.session_state.last_chapter = selected_chapter
+        get_next_word(conn, selected_chapter)
 
     # --- Flashcard UI ---
     word = st.session_state.current_word
     
     if word:
-        # DB Columns: 0:id, 1:level, 2:chapter, 3:arabic, 4:pronunciation, 5:english, 6:letter_pronunc, 7:letter_eng, 8:score
-        word_id, _, chapter, arabic, pronunc, english, l_pronunc, l_eng, score = word
+        # DB Columns: 0:id, 1:chapter, 2:arabic, 3:pronunciation, 4:english, 5:letter_pronunc, 6:letter_eng, 7:score
+        word_id, chapter, arabic, pronunc, english, l_pronunc, l_eng, score = word
         
         st.subheader(f"Chapter: {chapter}")
         st.caption(f"Mastery Score: {score}/3")
@@ -138,7 +144,6 @@ if levels:
 
             if st.session_state.show_meaning:
                 st.success(f"**Meaning:** {english}")
-                # Display the new letter-wise data if it exists
                 if l_pronunc and l_pronunc != 'nan':
                     st.info(f"**Letter-wise Pronunciation:** {l_pronunc}")
                 if l_eng and l_eng != 'nan':
@@ -150,24 +155,24 @@ if levels:
         with b_col1:
             if st.button("👍 Got it", type="primary", use_container_width=True):
                 update_score(conn, word_id, True)
-                get_next_word(conn, selected_level)
+                get_next_word(conn, selected_chapter)
                 st.rerun()
                 
         with b_col2:
             if st.button("👎 Need Practice", use_container_width=True):
                 update_score(conn, word_id, False)
-                get_next_word(conn, selected_level)
+                get_next_word(conn, selected_chapter)
                 st.rerun()
 
     else:
         st.balloons()
-        st.success(f"🎉 You have mastered all the current words in {selected_level}!")
+        st.success(f"🎉 You have mastered all the current words in {selected_chapter}!")
         if st.button("Reset my progress and practice again"):
-            conn.cursor().execute("UPDATE vocab SET score = 0 WHERE level=?", (selected_level,))
+            conn.cursor().execute("UPDATE vocab SET score = 0 WHERE chapter=?", (selected_chapter,))
             conn.commit()
-            get_next_word(conn, selected_level)
+            get_next_word(conn, selected_chapter)
             st.rerun()
 else:
-    st.info("Loading your vocabulary from Google Sheets... Make sure your sheet has a column exactly named 'Level'.")
+    st.info("Loading your vocabulary from Google Sheets...")
 
 conn.close()
