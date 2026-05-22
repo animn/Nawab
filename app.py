@@ -11,7 +11,7 @@ st.set_page_config(page_title="Kuwaiti Lingo", page_icon="🇰🇼", layout="cen
 
 # --- Database & Setup ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress.db"
+DB_NAME = "learning_progress_v2.db" # Updated to v2 to prevent schema crashes
 
 # Initialize SQLite Database to save scores permanently
 def init_db():
@@ -19,11 +19,11 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS vocab 
                  (id TEXT PRIMARY KEY, level TEXT, chapter TEXT, arabic TEXT, 
-                  pronunciation TEXT, english TEXT, explanation TEXT, example TEXT, score INTEGER)''')
+                  pronunciation TEXT, english TEXT, letter_pronunc TEXT, letter_eng TEXT, score INTEGER)''')
     conn.commit()
     return conn
 
-# Fetch new words from Google Sheets and add them to SQLite (without overwriting scores)
+# Fetch new words from Google Sheets
 @st.cache_data(ttl=600)
 def fetch_sheet_data(url):
     return pd.read_csv(url)
@@ -31,18 +31,28 @@ def fetch_sheet_data(url):
 def sync_data(conn, df):
     c = conn.cursor()
     for _, row in df.iterrows():
+        # Skip empty rows safely
+        arabic_text = str(row.get('Arabic Script', ''))
+        if not arabic_text or arabic_text == 'nan':
+            continue
+            
         # Create a unique ID for the word based on the Arabic script
-        word_id = hashlib.md5(str(row.get('Arabic Script', '')).encode()).hexdigest()
+        word_id = hashlib.md5(arabic_text.encode()).hexdigest()
         
         # Check if word exists in DB
         c.execute("SELECT id FROM vocab WHERE id=?", (word_id,))
         if not c.fetchone():
-            c.execute('''INSERT INTO vocab (id, level, chapter, arabic, pronunciation, english, explanation, example, score)
+            c.execute('''INSERT INTO vocab (id, level, chapter, arabic, pronunciation, english, letter_pronunc, letter_eng, score)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
-                      (word_id, str(row.get('Level', '')), str(row.get('Chapter', '')), 
-                       str(row.get('Arabic Script', '')), str(row.get('Pronunciation', '')), 
-                       str(row.get('English Meaning', '')), str(row.get('Explanation', '')), 
-                       str(row.get('Example Sentence', '')), 0))
+                      (word_id, 
+                       str(row.get('Level', '')), 
+                       str(row.get('Chapter', '')), 
+                       arabic_text, 
+                       str(row.get('Pronunciation', '')), 
+                       str(row.get('English Meaning', '')), 
+                       str(row.get('letterwise pronounciation', '')), 
+                       str(row.get('letterwise english', '')), 
+                       0))
     conn.commit()
 
 # --- Session State Management ---
@@ -58,10 +68,8 @@ def get_next_word(conn, level):
     words = c.fetchall()
     
     if not words:
-        # If all words mastered, reset or congratulate
         return None
     
-    # Pick a random word from the unmastered list
     st.session_state.current_word = random.choice(words)
     st.session_state.show_meaning = False
 
@@ -70,7 +78,6 @@ def update_score(conn, word_id, is_correct):
     if is_correct:
         c.execute("UPDATE vocab SET score = score + 1 WHERE id=?", (word_id,))
     else:
-        # Thumbs down resets progress on this word
         c.execute("UPDATE vocab SET score = 0 WHERE id=?", (word_id,))
     conn.commit()
 
@@ -81,19 +88,23 @@ st.title("🇰🇼 Learn Kuwaiti Arabic")
 conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
+    
+    # Failsafe: Ensure 'Level' column exists to prevent KeyError
+    if 'Level' not in df.columns:
+        st.error("🚨 Critical Error: Could not find the 'Level' column in your Google Sheet. Please check your spelling and spacing in Row 1.")
+        st.stop()
+        
     sync_data(conn, df)
 except Exception as e:
     st.error(f"Error reading Google Sheet: {e}")
 
 # Navigation
 st.sidebar.header("Navigation")
-# Get unique levels from DB
-levels = [row[0] for row in conn.cursor().execute("SELECT DISTINCT level FROM vocab WHERE level != 'nan'").fetchall()]
+levels = [row[0] for row in conn.cursor().execute("SELECT DISTINCT level FROM vocab WHERE level != 'nan' AND level != ''").fetchall()]
 
 if levels:
     selected_level = st.sidebar.selectbox("Choose your Level", levels)
     
-    # Load first word if empty or level changed
     if "last_level" not in st.session_state or st.session_state.last_level != selected_level:
         st.session_state.last_level = selected_level
         get_next_word(conn, selected_level)
@@ -102,19 +113,17 @@ if levels:
     word = st.session_state.current_word
     
     if word:
-        # DB Columns: 0:id, 1:level, 2:chapter, 3:arabic, 4:pronunciation, 5:english, 6:explanation, 7:example, 8:score
-        word_id, _, chapter, arabic, pronunc, english, expl, ex, score = word
+        # DB Columns: 0:id, 1:level, 2:chapter, 3:arabic, 4:pronunciation, 5:english, 6:letter_pronunc, 7:letter_eng, 8:score
+        word_id, _, chapter, arabic, pronunc, english, l_pronunc, l_eng, score = word
         
         st.subheader(f"Chapter: {chapter}")
         st.caption(f"Mastery Score: {score}/3")
         
-        # Word and Audio Container
         with st.container(border=True):
             col1, col2 = st.columns([3, 1])
             with col1:
                 st.markdown(f"<h1 style='text-align: right; font-size: 50px;' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
             with col2:
-                # Generate native audio instantly
                 with st.spinner("🔊"):
                     tts = gTTS(text=str(arabic), lang='ar')
                     fp = io.BytesIO()
@@ -124,19 +133,17 @@ if levels:
 
             st.divider()
             
-            # The Toggle Pronunciation Button
             if st.button(f"🗣️ Click to toggle meaning: **{pronunc}**", use_container_width=True):
                 st.session_state.show_meaning = not st.session_state.show_meaning
 
-            # The English Pop-up/Reveal
             if st.session_state.show_meaning:
                 st.success(f"**Meaning:** {english}")
-                if expl and expl != 'nan':
-                    st.info(f"**Explanation:** {expl}")
-                if ex and ex != 'nan':
-                    st.warning(f"**Example:** {ex}")
+                # Display the new letter-wise data if it exists
+                if l_pronunc and l_pronunc != 'nan':
+                    st.info(f"**Letter-wise Pronunciation:** {l_pronunc}")
+                if l_eng and l_eng != 'nan':
+                    st.warning(f"**Letter-wise English:** {l_eng}")
 
-        # Thumbs Up / Thumbs Down Controls
         st.write("How well did you know this?")
         b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
         
@@ -161,6 +168,6 @@ if levels:
             get_next_word(conn, selected_level)
             st.rerun()
 else:
-    st.info("Loading your vocabulary from Google Sheets...")
+    st.info("Loading your vocabulary from Google Sheets... Make sure your sheet has a column exactly named 'Level'.")
 
 conn.close()
