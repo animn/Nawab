@@ -1,192 +1,166 @@
 import streamlit as st
-import json
-import random
-import io
+import pandas as pd
+import sqlite3
 from gtts import gTTS
+import io
+import random
+import hashlib
 
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    st.error("Missing libraries. Please run: pip install streamlit google-genai gTTS")
-    st.stop()
+# --- Page Configuration ---
+st.set_page_config(page_title="Kuwaiti Lingo", page_icon="🇰🇼", layout="centered")
 
-# --- 1. PAGE CONFIG & MOBILE STYLING ---
-st.set_page_config(page_title="Kanfani Kuwaiti", page_icon="🇰🇼", layout="centered", initial_sidebar_state="collapsed")
+# --- Database & Setup ---
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
+DB_NAME = "learning_progress.db"
 
-st.markdown("""
-<style>
-.main .block-container { max-width: 450px !important; padding-top: 2rem !important; margin: 0 auto !important; }
-.stApp { background-color: #0f172a; color: #f8fafc; }
-div[data-testid="stButton"] > button { border-radius: 12px; height: 50px; font-weight: 600; background: rgba(255, 255, 255, 0.05); color: #f8fafc; border: 1px solid rgba(255, 255, 255, 0.2); }
-div[data-testid="stButton"] > button:active { background: #3b82f6; }
-.stSuccess { background: rgba(34, 197, 94, 0.1) !important; border: 1px solid #22c55e !important; color: #f8fafc !important; }
-.stError { background: rgba(239, 68, 68, 0.1) !important; border: 1px solid #ef4444 !important; color: #f8fafc !important; }
-</style>
-""", unsafe_allow_html=True)
+# Initialize SQLite Database to save scores permanently
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS vocab 
+                 (id TEXT PRIMARY KEY, level TEXT, chapter TEXT, arabic TEXT, 
+                  pronunciation TEXT, english TEXT, explanation TEXT, example TEXT, score INTEGER)''')
+    conn.commit()
+    return conn
 
-# --- 2. STATE MANAGEMENT ---
-for key in ['streak', 'points', 'lesson_progress']:
-    if key not in st.session_state: st.session_state[key] = 0
-if 'mistake_bank' not in st.session_state: st.session_state.mistake_bank = []
-if 'current_q' not in st.session_state: st.session_state.current_q = None
-if 'feedback' not in st.session_state: st.session_state.feedback = None
-if 'voice_feedback' not in st.session_state: st.session_state.voice_feedback = None
-if 'more_examples' not in st.session_state: st.session_state.more_examples = None
+# Fetch new words from Google Sheets and add them to SQLite (without overwriting scores)
+@st.cache_data(ttl=600)
+def fetch_sheet_data(url):
+    return pd.read_csv(url)
 
-# --- 3. HELPER FUNCTIONS & GEMINI ---
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    client = genai.Client(api_key=GEMINI_API_KEY)
-except:
-    client = None
-    GEMINI_API_KEY = None
+def sync_data(conn, df):
+    c = conn.cursor()
+    for _, row in df.iterrows():
+        # Create a unique ID for the word based on the Arabic script
+        word_id = hashlib.md5(str(row.get('Arabic Script', '')).encode()).hexdigest()
+        
+        # Check if word exists in DB
+        c.execute("SELECT id FROM vocab WHERE id=?", (word_id,))
+        if not c.fetchone():
+            c.execute('''INSERT INTO vocab (id, level, chapter, arabic, pronunciation, english, explanation, example, score)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+                      (word_id, str(row.get('Level', '')), str(row.get('Chapter', '')), 
+                       str(row.get('Arabic Script', '')), str(row.get('Pronunciation', '')), 
+                       str(row.get('English Meaning', '')), str(row.get('Explanation', '')), 
+                       str(row.get('Example Sentence', '')), 0))
+    conn.commit()
 
-SYSTEM_PROMPT = """
-You are Kanfani, a gamified Kuwaiti Arabic AI coach. Output EXCLUSIVELY in JSON format.
+# --- Session State Management ---
+if "show_meaning" not in st.session_state:
+    st.session_state.show_meaning = False
+if "current_word" not in st.session_state:
+    st.session_state.current_word = None
 
-Modes:
-1. `generate`: Create a multiple choice question relevant to living in Kuwait.
-{"question": "English phrase", "options": ["opt1", "opt2", "opt3", "opt4"], "correct_answer": "Exact match", "phonetic": "English transliteration of correct answer", "explanation": "Grammar/vocab rule"}
-
-2. `evaluate_audio`: Listen to the user's audio and evaluate their pronunciation of the target phrase.
-{"feedback": "Short, friendly critique of their pronunciation or accent based on Kuwaiti dialect."}
-
-3. `generate_examples`: Generate 2 more examples using the target vocabulary.
-{"examples": [{"kuwaiti": "Arabic text", "phonetic": "Transliteration", "english": "English meaning"}]}
-"""
-
-def fetch_new_question():
-    if not client: return None
-    with st.spinner("Loading next challenge..."):
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents="Mode: generate",
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, response_mime_type="application/json")
-        )
-        data = json.loads(resp.text)
-        random.shuffle(data["options"])
-        return data
-
-def generate_audio(text):
-    """Converts Arabic text to MP3 bytes."""
-    try:
-        tts = gTTS(text=text, lang='ar', slow=False)
-        audio_stream = io.BytesIO()
-        tts.write_to_fp(audio_stream)
-        audio_stream.seek(0)
-        return audio_stream
-    except:
+def get_next_word(conn, level):
+    c = conn.cursor()
+    # Fetch words that haven't been mastered yet (score < 3)
+    c.execute("SELECT * FROM vocab WHERE level=? AND score < 3", (level,))
+    words = c.fetchall()
+    
+    if not words:
+        # If all words mastered, reset or congratulate
         return None
+    
+    # Pick a random word from the unmastered list
+    st.session_state.current_word = random.choice(words)
+    st.session_state.show_meaning = False
 
-# --- 4. APP LAYOUT ---
-st.markdown("<h2 style='text-align: center;'>🇰🇼 Kanfani</h2>", unsafe_allow_html=True)
-tab_learn, tab_review, tab_dash = st.tabs(["📚 Learn", "🔄 Mistakes", "📊 Dash"])
-
-with tab_learn:
-    if not GEMINI_API_KEY:
-        st.warning("Please configure `GEMINI_API_KEY` in Streamlit secrets.")
+def update_score(conn, word_id, is_correct):
+    c = conn.cursor()
+    if is_correct:
+        c.execute("UPDATE vocab SET score = score + 1 WHERE id=?", (word_id,))
     else:
-        if st.session_state.current_q is None:
-            st.session_state.current_q = fetch_new_question()
-            st.rerun()
-            
-        q = st.session_state.current_q
+        # Thumbs down resets progress on this word
+        c.execute("UPDATE vocab SET score = 0 WHERE id=?", (word_id,))
+    conn.commit()
+
+# --- App Layout ---
+st.title("🇰🇼 Learn Kuwaiti Arabic")
+
+# Initialize and sync databases
+conn = init_db()
+try:
+    df = fetch_sheet_data(SHEET_URL)
+    sync_data(conn, df)
+except Exception as e:
+    st.error(f"Error reading Google Sheet: {e}")
+
+# Navigation
+st.sidebar.header("Navigation")
+# Get unique levels from DB
+levels = [row[0] for row in conn.cursor().execute("SELECT DISTINCT level FROM vocab WHERE level != 'nan'").fetchall()]
+
+if levels:
+    selected_level = st.sidebar.selectbox("Choose your Level", levels)
+    
+    # Load first word if empty or level changed
+    if "last_level" not in st.session_state or st.session_state.last_level != selected_level:
+        st.session_state.last_level = selected_level
+        get_next_word(conn, selected_level)
+
+    # --- Flashcard UI ---
+    word = st.session_state.current_word
+    
+    if word:
+        # DB Columns: 0:id, 1:level, 2:chapter, 3:arabic, 4:pronunciation, 5:english, 6:explanation, 7:example, 8:score
+        word_id, _, chapter, arabic, pronunc, english, expl, ex, score = word
         
-        # --- A. QUESTION STATE ---
-        if not st.session_state.feedback:
-            st.write("Translate this phrase:")
-            st.subheader(q.get("question", ""))
-            
-            for idx, opt in enumerate(q.get("options", [])):
-                if st.button(opt, key=f"opt_{idx}"):
-                    if opt == q.get("correct_answer"):
-                        st.session_state.points += 15
-                        st.session_state.streak += 1
-                        st.session_state.lesson_progress += 10
-                        st.session_state.feedback = {"correct": True, "msg": f"**ممتاز!**\n\n{q.get('explanation')}"}
-                    else:
-                        st.session_state.streak = 0
-                        if q not in st.session_state.mistake_bank: st.session_state.mistake_bank.append(q)
-                        st.session_state.feedback = {"correct": False, "msg": f"The correct answer is **{q.get('correct_answer')}**.\n\n*Rule:* {q.get('explanation')}"}
-                    st.rerun()
+        st.subheader(f"Chapter: {chapter}")
+        st.caption(f"Mastery Score: {score}/3")
         
-        # --- B. FEEDBACK STATE (WITH NEW AUDIO FEATURES) ---
-        else:
-            if st.session_state.feedback["correct"]: st.success(st.session_state.feedback["msg"])
-            else: st.error(st.session_state.feedback["msg"])
+        # Word and Audio Container
+        with st.container(border=True):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f"<h1 style='text-align: right; font-size: 50px;' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
+            with col2:
+                # Generate native audio instantly
+                with st.spinner("🔊"):
+                    tts = gTTS(text=str(arabic), lang='ar')
+                    fp = io.BytesIO()
+                    tts.write_to_fp(fp)
+                    fp.seek(0)
+                    st.audio(fp, format="audio/mp3")
+
+            st.divider()
+            
+            # The Toggle Pronunciation Button
+            if st.button(f"🗣️ Click to toggle meaning: **{pronunc}**", use_container_width=True):
+                st.session_state.show_meaning = not st.session_state.show_meaning
+
+            # The English Pop-up/Reveal
+            if st.session_state.show_meaning:
+                st.success(f"**Meaning:** {english}")
+                if expl and expl != 'nan':
+                    st.info(f"**Explanation:** {expl}")
+                if ex and ex != 'nan':
+                    st.warning(f"**Example:** {ex}")
+
+        # Thumbs Up / Thumbs Down Controls
+        st.write("How well did you know this?")
+        b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
+        
+        with b_col1:
+            if st.button("👍 Got it", type="primary", use_container_width=True):
+                update_score(conn, word_id, True)
+                get_next_word(conn, selected_level)
+                st.rerun()
                 
-            st.markdown(f"🗣️ **Phonetic:** *{q.get('phonetic', '')}*")
-            
-            # 1. Listen to phrase
-            audio_bytes = generate_audio(q.get("correct_answer"))
-            if audio_bytes: st.audio(audio_bytes, format="audio/mp3")
-
-            st.write("---")
-            
-            # 2. Voice Validation
-            st.write("**🎙️ Test your pronunciation:**")
-            user_audio = st.audio_input("Record yourself")
-            
-            if user_audio:
-                if st.button("Check Accent"):
-                    with st.spinner("AI is listening..."):
-                        resp = client.models.generate_content(
-                            model="gemini-2.5-flash",
-                            contents=[
-                                f"Mode: evaluate_audio. The user is trying to say: {q.get('correct_answer')}",
-                                types.Part.from_bytes(data=user_audio.read(), mime_type='audio/wav')
-                            ],
-                            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, response_mime_type="application/json")
-                        )
-                        st.session_state.voice_feedback = json.loads(resp.text).get("feedback")
-            
-            if st.session_state.voice_feedback:
-                st.info(f"🤖 **Coach:** {st.session_state.voice_feedback}")
-
-            st.write("---")
-
-            # 3. Generate More Examples
-            if st.button("Give me 2 more examples"):
-                with st.spinner("Generating examples..."):
-                    resp = client.models.generate_content(
-                        model="gemini-2.5-flash",
-                        contents=f"Mode: generate_examples. Target concept: {q.get('correct_answer')}",
-                        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, response_mime_type="application/json")
-                    )
-                    st.session_state.more_examples = json.loads(resp.text).get("examples", [])
-                    
-            if st.session_state.more_examples:
-                st.write("**Extra Practice:**")
-                for ex in st.session_state.more_examples:
-                    with st.container(border=True):
-                        st.markdown(f"**{ex.get('kuwaiti')}** (*{ex.get('phonetic')}*)")
-                        st.caption(ex.get('english'))
-                        ex_audio = generate_audio(ex.get('kuwaiti'))
-                        if ex_audio: st.audio(ex_audio, format="audio/mp3")
-
-            st.write("")
-            # Continue Button
-            if st.button("Next Question ➡️", type="primary"):
-                st.session_state.current_q = None
-                st.session_state.feedback = None
-                st.session_state.voice_feedback = None
-                st.session_state.more_examples = None
+        with b_col2:
+            if st.button("👎 Need Practice", use_container_width=True):
+                update_score(conn, word_id, False)
+                get_next_word(conn, selected_level)
                 st.rerun()
 
-# --- TAB 2 & 3: REVIEW & DASHBOARD ---
-with tab_review:
-    st.subheader("Your Mistake Bank")
-    for mistake in reversed(st.session_state.mistake_bank):
-        with st.expander(f"{mistake.get('question')}"):
-            st.markdown(f"**Answer:** {mistake.get('correct_answer')} (*{mistake.get('phonetic')}*)")
-    if st.button("Clear Mistake Bank"):
-        st.session_state.mistake_bank = []
-        st.rerun()
+    else:
+        st.balloons()
+        st.success(f"🎉 You have mastered all the current words in {selected_level}!")
+        if st.button("Reset my progress and practice again"):
+            conn.cursor().execute("UPDATE vocab SET score = 0 WHERE level=?", (selected_level,))
+            conn.commit()
+            get_next_word(conn, selected_level)
+            st.rerun()
+else:
+    st.info("Loading your vocabulary from Google Sheets...")
 
-with tab_dash:
-    col1, col2 = st.columns(2)
-    col1.metric("🔥 Streak", f"{st.session_state.streak}")
-    col2.metric("⭐ XP", st.session_state.points)
-    st.progress((st.session_state.lesson_progress % 100) / 100.0)
-    st.caption(f"Level {(st.session_state.lesson_progress // 100) + 1}")
+conn.close()
