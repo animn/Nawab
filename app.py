@@ -19,55 +19,76 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- Mobile-safe UI CSS ---
+# --- Mobile-first compact UI CSS ---
 st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 1rem;
-            padding-bottom: 1rem;
+            padding-top: 0.75rem;
+            padding-bottom: 0.75rem;
             max-width: 760px;
         }
-        div[data-testid="stVerticalBlock"] {
-            gap: 0.55rem;
-        }
+        h2, h3, p { margin-top: 0rem; margin-bottom: 0.2rem; }
+        div[data-testid="stVerticalBlock"] { gap: 0.36rem; }
+        div[data-testid="stHorizontalBlock"] { gap: 0.32rem; align-items: center; }
+        div[data-testid="column"] { padding: 0rem 0.03rem; }
         .stButton > button {
-            min-height: 2.4rem;
-            padding: 0.25rem 0.6rem;
+            min-height: 2.05rem;
+            height: 2.05rem;
+            padding: 0rem 0.35rem;
+            line-height: 1;
+            width: 100%;
+            font-size: 0.92rem;
+        }
+        .stTextInput input {
+            min-height: 2.05rem;
+            height: 2.05rem;
+            padding-top: 0.1rem;
+            padding-bottom: 0.1rem;
+            font-size: 0.94rem;
         }
         textarea {
-            min-height: 52px !important;
+            min-height: 44px !important;
+            padding-top: 0.25rem !important;
+            padding-bottom: 0.25rem !important;
+            font-size: 0.9rem !important;
         }
-        audio {
-            width: 100% !important;
+        div[data-testid="stExpander"] details summary {
+            padding-top: 0.32rem;
+            padding-bottom: 0.32rem;
         }
         .word-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
-            margin: 0.15rem 0 0.25rem 0;
+            gap: 8px;
+            margin: 0.05rem 0 0.1rem 0;
         }
-        .word-chapter {
-            font-size: 0.95rem;
-            font-weight: 700;
-            overflow-wrap: anywhere;
-        }
-        .word-score {
-            font-size: 0.95rem;
-            white-space: nowrap;
-            text-align: right;
-        }
+        .word-chapter { font-size: 0.92rem; font-weight: 700; overflow-wrap: anywhere; }
+        .word-score { font-size: 0.88rem; white-space: nowrap; text-align: right; }
         .compact-arabic {
             text-align: right;
-            font-size: 42px;
-            line-height: 1.1;
-            margin: 0.25rem 0 0.5rem 0;
+            font-size: 34px;
+            line-height: 1.05;
+            margin: 0.05rem 0 0.25rem 0;
         }
-        .mini-label {
-            font-size: 0.85rem;
-            opacity: 0.75;
-            margin-bottom: -0.25rem;
+        .mini-audio-wrap {
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            opacity: 0.01;
+            position: absolute;
+            pointer-events: none;
+        }
+        .note-preview {
+            font-size: 0.82rem;
+            opacity: 0.82;
+            border: 1px solid rgba(128,128,128,0.35);
+            border-radius: 0.5rem;
+            padding: 0.4rem 0.55rem;
+            min-height: 2.05rem;
+            max-height: 2.6rem;
+            overflow: hidden;
         }
     </style>
     """,
@@ -82,26 +103,38 @@ def clean_val(val):
     return str(val).strip()
 
 @st.cache_data(show_spinner=False)
-def get_audio_player(text, player_style):
-    """Generates audio once and caches it. Returns HTML for mini player or bytes for native."""
+def get_audio_bytes(text):
     if not text:
         return None
     try:
         tts = gTTS(text=text, lang='ar')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
-        audio_bytes = fp.getvalue()
-
-        if player_style == "Mini Player":
-            b64 = base64.b64encode(audio_bytes).decode()
-            return f'''
-                <audio controls style="width: 100%; border-radius: 5px;">
-                    <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-                </audio>
-            '''
-        return audio_bytes
+        return fp.getvalue()
     except Exception:
         return None
+
+def render_mini_audio(audio_bytes, word_id):
+    if not audio_bytes:
+        st.caption("Audio unavailable")
+        return
+    b64 = base64.b64encode(audio_bytes).decode()
+    audio_id = f"aud_{word_id}"
+    st.markdown(
+        f"""
+        <div style="display:flex; gap:8px; align-items:center; width:100%;">
+            <button onclick="const a=document.getElementById('{audio_id}'); a.currentTime=0; a.play();" style="height:34px; min-width:62px; border-radius:8px; border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit; font-size:15px;">▶</button>
+            <select onchange="document.getElementById('{audio_id}').playbackRate=parseFloat(this.value);" style="height:34px; min-width:68px; border-radius:8px; border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit; font-size:14px;">
+                <option value="0.75">0.75x</option>
+                <option value="1" selected>1x</option>
+                <option value="1.25">1.25x</option>
+                <option value="1.5">1.5x</option>
+            </select>
+            <audio id="{audio_id}" preload="auto" src="data:audio/mp3;base64,{b64}"></audio>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # --- DATABASE MODULE ---
 def init_db():
@@ -181,13 +214,13 @@ def render_flashcard(conn, word_data, tab_key, player_style):
         unsafe_allow_html=True,
     )
 
-    b1, b2 = st.columns(2)
-    if b1.button("👍 I know this", key=f"up_{word_id}_{tab_key}", use_container_width=True):
+    b1, b2 = st.columns([1, 1])
+    if b1.button("👍", key=f"up_{word_id}_{tab_key}", use_container_width=True, help="I know this"):
         update_score(conn, word_id, True)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
-    if b2.button("👎 Practice", key=f"down_{word_id}_{tab_key}", use_container_width=True):
+    if b2.button("👎", key=f"down_{word_id}_{tab_key}", use_container_width=True, help="Needs practice"):
         update_score(conn, word_id, False)
         if tab_key == "home":
             st.session_state.current_word = None
@@ -195,12 +228,14 @@ def render_flashcard(conn, word_data, tab_key, player_style):
 
     with st.container(border=True):
         st.markdown(f"<h1 class='compact-arabic' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
-        audio_data = get_audio_player(arabic, player_style)
-        if audio_data:
-            if player_style == "Mini Player":
-                st.markdown(audio_data, unsafe_allow_html=True)
+        audio_bytes = get_audio_bytes(arabic)
+        if player_style == "Mini Player":
+            render_mini_audio(audio_bytes, word_id)
+        else:
+            if audio_bytes:
+                st.audio(audio_bytes, format="audio/mp3")
             else:
-                st.audio(audio_data, format="audio/mp3")
+                st.caption("Audio unavailable")
 
         with st.expander(f"🗣️ {pronunc} | {english}"):
             if expl:
@@ -212,23 +247,25 @@ def render_flashcard(conn, word_data, tab_key, player_style):
                     st.write(f"**Letter English:** {l_eng}")
 
     note_key = f"note_{word_id}_{tab_key}"
+    edit_key = f"edit_note_{word_id}_{tab_key}"
     if note_key not in st.session_state:
         st.session_state[note_key] = saved_note if saved_note else ""
+    if edit_key not in st.session_state:
+        st.session_state[edit_key] = False
 
-    st.markdown("<div class='mini-label'>AI Tutor</div>", unsafe_allow_html=True)
-    question = st.text_input(
-        "Ask AI",
+    sa_input, sa_button = st.columns([5, 1.05])
+    question = sa_input.text_input(
+        "S.A",
         key=f"q_{word_id}_{tab_key}",
         label_visibility="collapsed",
-        placeholder="Ask AI..."
+        placeholder="S.A..."
     )
 
-    ai_btn, save_btn = st.columns(2)
-    if ai_btn.button("A  Ask AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
+    if sa_button.button("S.A", key=f"ask_{word_id}_{tab_key}", use_container_width=True, help="Ask S.A"):
         if not GEMINI_API_KEY:
             st.error("Add valid Gemini API key in Streamlit secrets.")
         elif question:
-            with st.spinner("AI..."):
+            with st.spinner("S.A..."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
                     prompt = f"""
@@ -242,24 +279,33 @@ def render_flashcard(conn, word_data, tab_key, player_style):
                         response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
                     except Exception:
                         response = genai.GenerativeModel('gemini-pro').generate_content(prompt)
-                    st.session_state[note_key] += f"\nQ: {question}\nAI: {response.text.strip()}\n"
+                    answer = response.text.strip()
+                    st.session_state[note_key] += f"\nQ: {question}\nS.A: {answer}\n"
                     save_note(conn, word_id, st.session_state[note_key])
-                    st.toast("AI note added")
+                    st.toast("Saved to notes")
                 except Exception:
-                    st.error("AI error. Please check Gemini API key/model access.")
+                    st.error("S.A error. Please check Gemini API key/model access.")
 
-    if save_btn.button("✎ Save note", key=f"save_{word_id}_{tab_key}", use_container_width=True):
-        save_note(conn, word_id, st.session_state[note_key])
-        st.toast("Saved")
+    note_col, edit_col = st.columns([5, 1.05])
+    note_preview = st.session_state[note_key].strip() or "Notes..."
+    note_col.markdown(f"<div class='note-preview'>{note_preview[-160:]}</div>", unsafe_allow_html=True)
+    if edit_col.button("✎", key=f"edit_{word_id}_{tab_key}", use_container_width=True, help="Edit notes"):
+        st.session_state[edit_key] = not st.session_state[edit_key]
 
-    st.session_state[note_key] = st.text_area(
-        "Edit notes",
-        value=st.session_state[note_key],
-        key=f"text_{word_id}_{tab_key}",
-        label_visibility="collapsed",
-        placeholder="Notes...",
-        height=52
-    )
+    if st.session_state[edit_key]:
+        st.session_state[note_key] = st.text_area(
+            "Edit notes",
+            value=st.session_state[note_key],
+            key=f"text_{word_id}_{tab_key}",
+            label_visibility="collapsed",
+            placeholder="Notes...",
+            height=54
+        )
+        if st.button("Save", key=f"save_{word_id}_{tab_key}", use_container_width=True):
+            save_note(conn, word_id, st.session_state[note_key])
+            st.session_state[edit_key] = False
+            st.toast("Saved")
+            st.rerun()
 
 # --- MAIN APP SETUP ---
 st.markdown("## 🇰🇼 Yalla Kuwaiti!")
@@ -307,7 +353,9 @@ if selected_tab == "🎮 Daily":
     q1 = base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3")
     words = conn.cursor().execute(q1, params).fetchall()
     if words:
-        if "current_word" not in st.session_state or st.session_state.current_word is None:
+        current = st.session_state.get("current_word")
+        valid_ids = {w[0] for w in words}
+        if current is None or current[0] not in valid_ids:
             st.session_state.current_word = random.choice(words)
         render_flashcard(conn, st.session_state.current_word, "home", st.session_state.player_style)
     else:
@@ -340,7 +388,7 @@ elif selected_tab == "⚙️ Settings":
         options=["Mini Player", "Full Streamlit Player"],
         index=0 if st.session_state.player_style == "Mini Player" else 1,
         horizontal=True,
-        help="Mini Player uses a smaller footprint. Full Player uses Streamlit's native audio UI."
+        help="Mini Player shows only Play + speed. Full Player uses Streamlit's native audio UI."
     )
     if st.button("Refresh sheet data"):
         fetch_sheet_data.clear()
