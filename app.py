@@ -83,6 +83,10 @@ st.markdown(
             margin: 0;
             white-space: nowrap;
         }
+        .score-right {
+            text-align: right;
+            width: 100%;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -187,20 +191,20 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key, player_style):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    # One-line header: chapter + score + thumbs together
-    hc1, hc2, hc3, hc4 = st.columns([5.5, 1.5, 0.65, 0.65], vertical_alignment="center")
+    # One-line header: chapter left, thumbs + score right
+    hc1, hc2, hc3, hc4 = st.columns([5.8, 0.65, 0.65, 1.7], vertical_alignment="center")
     hc1.markdown(f"<div class='compact-meta'><b>{chapter}</b></div>", unsafe_allow_html=True)
-    hc2.markdown(f"<div class='compact-meta'>Score {score}/3</div>", unsafe_allow_html=True)
-    if hc3.button("👍", key=f"up_{word_id}_{tab_key}", help="I know this"):
+    if hc2.button("👍", key=f"up_{word_id}_{tab_key}", help="I know this"):
         update_score(conn, word_id, True)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
-    if hc4.button("👎", key=f"down_{word_id}_{tab_key}", help="Needs practice"):
+    if hc3.button("👎", key=f"down_{word_id}_{tab_key}", help="Needs practice"):
         update_score(conn, word_id, False)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
+    hc4.markdown(f"<div class='compact-meta score-right'>Score {score}/3</div>", unsafe_allow_html=True)
 
     # Compact flashcard body
     with st.container(border=True):
