@@ -16,20 +16,42 @@ except KeyError:
     GEMINI_API_KEY = None
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress_v8.db" # Kept v8 so your current progress is saved!
+DB_NAME = "learning_progress_v8.db"
 
 # --- AGGRESSIVE COMPRESSION CSS ---
 st.markdown(
     """
     <style>
-        .block-container { padding-top: 2rem !important; padding-bottom: 0.5rem !important; max-width: 600px; }
-        [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center !important; gap: 0.2rem !important; }
+        .block-container { padding-top: 1.5rem !important; padding-bottom: 0.5rem !important; max-width: 600px; }
+        
+        /* Force buttons to stay on screen and shrink gaps */
+        [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center !important; gap: 0.15rem !important; }
         [data-testid="column"] { min-width: 0 !important; flex-basis: 0 !important; flex-grow: 1 !important; }
-        [data-testid="stVerticalBlockBorderWrapper"] { padding: 0.5rem !important; }
-        audio { height: 40px !important; width: 100% !important; }
-        .stButton button, .stTextInput input { min-height: 34px !important; height: 34px !important; padding: 0 5px !important; font-size: 14px !important; }
-        .arabic-word { text-align: right; font-size: 40px; margin: 0 0 0.2rem 0; line-height: 1.1; }
-        .note-preview { font-size: 0.8rem; color: #ccc; border: 1px solid #555; border-radius: 5px; padding: 6px 8px; height: 34px; line-height: 1.2; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        [data-testid="stVerticalBlockBorderWrapper"] { padding: 0.4rem !important; }
+        
+        audio { height: 35px !important; width: 100% !important; margin-bottom: 0 !important; }
+        
+        .stButton button, .stTextInput input { 
+            min-height: 32px !important; 
+            height: 32px !important; 
+            padding: 0 4px !important; 
+            font-size: 14px !important; 
+        }
+        
+        .arabic-word { text-align: right; font-size: 38px; margin: 0 0 0.1rem 0; line-height: 1.1; }
+        
+        /* UPDATED: Wraps text and makes the box taller so you can read notes */
+        .note-preview { 
+            font-size: 0.85rem; 
+            color: #ccc; 
+            border: 1px solid #555; 
+            border-radius: 5px; 
+            padding: 6px 8px; 
+            height: 70px; 
+            line-height: 1.3; 
+            overflow-y: auto; 
+            white-space: pre-wrap; 
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -114,22 +136,23 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    c1, c2, c3 = st.columns([5, 1.2, 1.2])
-    c1.markdown(f"<div style='line-height:1.2; margin-bottom:5px;'><b>{chapter}</b><br><span style='font-size:12px; color:#aaa;'>Score: {score}/3</span></div>", unsafe_allow_html=True)
+    # INLINE HEADER: Adjusted ratios so buttons never get pushed off screen
+    c1, c2, c3 = st.columns([4.5, 1.2, 1.2])
+    c1.markdown(f"<div style='line-height:1.2; margin-bottom:2px;'><b style='font-size:15px;'>{chapter}</b><br><span style='font-size:11px; color:#aaa;'>Score: {score}/3</span></div>", unsafe_allow_html=True)
     
     if c2.button("👍", key=f"up_{word_id}_{tab_key}"):
         new_score = update_score(conn, word_id, True)
-        # Set a session state toast so it triggers after the page reruns
-        st.session_state.flash_toast = f"👍 Correct! Score increased to {new_score}/3" if new_score < 3 else "👑 Word Mastered!"
+        st.session_state.flash_toast = f"👍 Score increased to {new_score}/3" if new_score < 3 else "👑 Word Mastered!"
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
         
     if c3.button("👎", key=f"down_{word_id}_{tab_key}"):
         update_score(conn, word_id, False)
-        st.session_state.flash_toast = "👎 Score reset to 0. We'll practice this more!"
+        st.session_state.flash_toast = "👎 Score reset to 0."
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
 
+    # FLASHCARD BODY
     with st.container(border=True):
         st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
         audio_bytes = get_audio_bytes(arabic)
@@ -138,16 +161,18 @@ def render_flashcard(conn, word_data, tab_key):
         display_title = f"{pronunc if pronunc else 'Pronunciation'} | {english if english else 'Meaning'}"
         with st.expander(f"🗣️ {display_title}"):
             if expl: st.info(f"**Explanation:** {expl}")
-            if l_pronunc: st.write(f"**Letters (Sound):** {l_pronunc}")
-            if l_eng: st.write(f"**Letters (English):** {l_eng}")
+            if l_pronunc: st.write(f"**Sound:** {l_pronunc}")
+            if l_eng: st.write(f"**Letters:** {l_eng}")
 
+    # INLINE S.AI TUTOR + SAVE BUTTON
     note_key = f"note_{word_id}_{tab_key}"
     edit_key = f"edit_note_{word_id}_{tab_key}"
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    sa_col1, sa_col2 = st.columns([4.2, 1])
-    question = sa_col1.text_input("Ask S.AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI a short question...")
+    # 3 Columns: [ Input Box ] [ S.AI ] [ Save ]
+    sa_col1, sa_col2, sa_col3 = st.columns([3.8, 1.1, 1.1])
+    question = sa_col1.text_input("Ask", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI...")
     
     if sa_col2.button("S.AI", key=f"ask_{word_id}_{tab_key}"):
         if not GEMINI_API_KEY: st.error("Add API key!")
@@ -158,27 +183,34 @@ def render_flashcard(conn, word_data, tab_key):
                     try: resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context.")
                     except: resp = genai.GenerativeModel('gemini-pro').generate_content(f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context.")
                     st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
+                    # Auto-save when AI answers
                     save_note(conn, word_id, st.session_state[note_key])
-                    st.toast("Note updated!")
+                    st.toast("AI response added & saved!")
+                    st.rerun() # Refresh to show note in preview
                 except Exception: st.error("S.AI Error.")
 
-    nt_col1, nt_col2 = st.columns([4.2, 1])
+    if sa_col3.button("💾", key=f"quick_save_{word_id}_{tab_key}"):
+        save_note(conn, word_id, st.session_state[note_key])
+        st.toast("Notes saved!")
+
+    # INLINE NOTES VIEWER/EDITOR
+    nt_col1, nt_col2 = st.columns([4.5, 1])
     display_text = st.session_state[note_key].strip() or "No notes yet..."
+    # The note-preview class now wraps text and allows internal scrolling
     nt_col1.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
     
     if nt_col2.button("✏️", key=f"edit_btn_{word_id}_{tab_key}"):
         st.session_state[edit_key] = not st.session_state[edit_key]
 
     if st.session_state[edit_key]:
-        st.session_state[note_key] = st.text_area("Edit notes", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=70)
-        if st.button("💾 Save", key=f"save_{word_id}_{tab_key}", use_container_width=True):
+        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=80)
+        if st.button("Save Edits", key=f"save_{word_id}_{tab_key}", use_container_width=True):
             save_note(conn, word_id, st.session_state[note_key])
             st.session_state[edit_key] = False
             st.toast("Saved")
             st.rerun()
 
 # --- MAIN APP SETUP ---
-# Trigger any pending toast notifications immediately on load
 if "flash_toast" in st.session_state:
     st.toast(st.session_state.flash_toast)
     del st.session_state.flash_toast
@@ -189,7 +221,7 @@ conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
     sync_data(conn, df)
-except Exception as e: st.error("Spreadsheet error. Check access.")
+except Exception as e: st.error("Spreadsheet error.")
 
 st.sidebar.header("Filters")
 chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != '' ORDER BY chapter").fetchall()]
@@ -197,11 +229,11 @@ selected_chapter = st.sidebar.selectbox("Chapter", ["All"] + chapters)
 
 total, mastered, learning, practice = get_stats(conn)
 st.sidebar.divider()
-st.sidebar.markdown("🏆 **Progress Dashboard**")
+st.sidebar.markdown("🏆 **Dashboard**")
 st.sidebar.metric("👑 Mastered (Score 3+)", mastered)
 st.sidebar.metric("📈 Learning (Score 1-2)", learning)
 st.sidebar.metric("🔴 Needs Practice (Score 0)", practice)
-st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Overall Fluency: {int((mastered/total)*100) if total else 0}%")
+st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
 
 tab1, tab2, tab3, tab4 = st.tabs(["🎮 Daily", "🏋️ Review", "👑 Mastered", "⚙️ Sync"])
 
@@ -220,10 +252,9 @@ with tab1:
             st.session_state.current_word = random.choice(words)
         render_flashcard(conn, st.session_state.current_word, "home")
     else:
-        st.success("🎉 Section fully mastered! Check the Mastered tab.")
+        st.success("🎉 Section fully mastered!")
 
 with tab2:
-    # Changed from score=0 to score<3 so words don't vanish while you are learning them!
     rows = conn.cursor().execute(base_q + (" AND score < 3 ORDER BY score ASC" if "WHERE" in base_q else " WHERE score < 3 ORDER BY score ASC"), params).fetchall()
     for w in rows[:20]:
         with st.expander(f"🔴 {w[2]} ({w[4]}) - Score: {w[8]}/3"):
@@ -236,7 +267,6 @@ with tab3:
             render_flashcard(conn, w, f"mast_{w[0]}")
 
 with tab4:
-    st.info("Force a manual sync with your Google Sheet below if new words aren't showing up.")
     if st.button("Refresh Spreadsheet Data"):
         fetch_sheet_data.clear()
         st.session_state.current_word = None
