@@ -11,42 +11,55 @@ import google.generativeai as genai
 # --- Configuration & Keys ---
 st.set_page_config(page_title="Yalla Kuwaiti!", page_icon="🇰🇼", layout="centered")
 
+# AGGRESSIVE UI COMPRESSION & MOBILE STACKING OVERRIDE
+st.markdown("""
+    <style>
+        /* Remove top whitespace */
+        .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+        
+        /* Force Streamlit to NEVER stack columns vertically on mobile */
+        [data-testid="column"] {
+            min-width: 0 !important;
+            flex-basis: 0 !important;
+            flex-grow: 1 !important;
+        }
+        
+        /* Shrink input boxes and buttons to save space */
+        .stTextInput input { min-height: 35px !important; height: 35px !important; padding: 5px !important; }
+        .stButton button { min-height: 35px !important; height: 35px !important; padding: 0 !important; }
+        
+        /* Tighten expander spacing */
+        .streamlit-expanderHeader { padding-top: 0 !important; padding-bottom: 0 !important; }
+    </style>
+""", unsafe_allow_html=True)
+
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
     GEMINI_API_KEY = None
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress_v8.db"
+DB_NAME = "learning_progress_v9.db"
 
 # --- HELPER FUNCTIONS ---
 def clean_val(val):
-    """Prevents 'nan' from showing up in the UI and crashing the app."""
-    if pd.isna(val) or str(val).strip().lower() == 'nan':
-        return ""
+    if pd.isna(val) or str(val).strip().lower() == 'nan': return ""
     return str(val).strip()
 
-@st.cache_data(show_spinner=False)
-def get_audio_player(text, player_style):
-    """Generates audio once and caches it. Returns HTML for mini player or bytes for native."""
-    if not text: return None
+def generate_mini_audio(text):
+    """Generates a compact HTML audio player with speed controls."""
     try:
         tts = gTTS(text=text, lang='ar')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
-        audio_bytes = fp.getvalue()
-        
-        if player_style == "Mini Player":
-            b64 = base64.b64encode(audio_bytes).decode()
-            # Custom HTML audio player to save space
-            return f'''
-                <audio controls style="height: 35px; width: 100%; border-radius: 5px;">
-                    <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-                </audio>
-            '''
-        return audio_bytes
+        b64 = base64.b64encode(fp.getvalue()).decode()
+        return f'''
+            <audio controls style="height: 30px; width: 180px;">
+                <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+        '''
     except:
-        return None
+        return "<p>Audio Error</p>"
 
 # --- DATABASE MODULE ---
 def init_db():
@@ -85,8 +98,10 @@ def sync_data(conn, df):
     conn.commit()
 
 def update_score(conn, word_id, is_correct):
-    conn.cursor().execute("UPDATE vocab SET score = ? WHERE id=?", 
-                          (conn.cursor().execute("SELECT score FROM vocab WHERE id=?", (word_id,)).fetchone()[0] + 1 if is_correct else 0, word_id))
+    c = conn.cursor()
+    current_score = c.execute("SELECT score FROM vocab WHERE id=?", (word_id,)).fetchone()[0]
+    new_score = current_score + 1 if is_correct else 0
+    c.execute("UPDATE vocab SET score = ? WHERE id=?", (new_score, word_id))
     conn.commit()
 
 def get_stats(conn):
@@ -97,84 +112,77 @@ def get_stats(conn):
     return total, mastered, total - mastered - practice, practice
 
 # --- UI COMPONENT MODULE ---
-def render_flashcard(conn, word_data, tab_key, player_style):
+def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
     
-    # Inline Compact Header
-    hc1, hc2, hc3, hc4 = st.columns([4, 2, 1, 1])
-    hc1.markdown(f"**{chapter}**")
-    hc2.caption(f"Score: {score}/3")
-    if hc3.button("👍", key=f"up_{word_id}_{tab_key}"):
+    # ROW 1: INLINE HEADER (Forced by CSS)
+    h_col1, h_col2, h_col3, h_col4 = st.columns([5, 3, 1, 1])
+    h_col1.markdown(f"**{chapter}**")
+    h_col2.caption(f"Score:{score}/3")
+    if h_col3.button("👍", key=f"up_{word_id}_{tab_key}"):
         update_score(conn, word_id, True)
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
-    if hc4.button("👎", key=f"down_{word_id}_{tab_key}"):
+    if h_col4.button("👎", key=f"down_{word_id}_{tab_key}"):
         update_score(conn, word_id, False)
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
 
-    # Flashcard Body
+    # ROW 2: FLASHCARD BODY
     with st.container(border=True):
-        f_col1, f_col2 = st.columns([3, 2])
-        f_col1.markdown(f"<h1 style='text-align: right; font-size: 40px; margin:0;' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1 style='text-align: right; font-size: 38px; margin:0;' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
         
-        # Audio Player (No Rerun Required)
-        with f_col2:
-            st.write("") # Spacing
-            audio_data = get_audio_player(arabic, player_style)
-            if audio_data:
-                if player_style == "Mini Player":
-                    st.markdown(audio_data, unsafe_allow_html=True)
-                else:
-                    st.audio(audio_data, format="audio/mp3")
+        audio_key = f"audio_{word_id}_{tab_key}"
+        if audio_key not in st.session_state: st.session_state[audio_key] = False
+        
+        # Audio Button right beneath text to save space
+        if st.button("🔊 Load Audio", key=f"btn_{audio_key}"):
+            st.session_state[audio_key] = True
+            
+        if st.session_state[audio_key]:
+            st.markdown(generate_mini_audio(arabic), unsafe_allow_html=True)
 
-        # Expander for Meaning (No Rerun Required)
         with st.expander(f"🗣️ Meaning: **{pronunc}**"):
             if english: st.success(f"**English:** {english}")
             if expl: st.info(f"**Explanation:** {expl}")
             if l_pronunc or l_eng:
                 st.divider()
-                st.caption("🔍 Letter-wise Breakdown")
-                if l_pronunc: st.write(f"**Pronunciation:** {l_pronunc}")
-                if l_eng: st.write(f"**English:** {l_eng}")
+                st.caption("🔍 Breakdown")
+                if l_pronunc: st.write(f"**Sound:** {l_pronunc}")
+                if l_eng: st.write(f"**Letters:** {l_eng}")
 
-    # Compact AI & Notes Bar
+    # ROW 3: AI & NOTES (Forced Inline by CSS)
     note_key = f"note_{word_id}_{tab_key}"
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     
-    st.caption("📝 Notes & AI Tutor")
-    ai_c1, ai_c2, ai_c3 = st.columns([5, 1, 1])
-    question = ai_c1.text_input("Ask AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask AI a quick question...")
+    ai_col1, ai_col2, ai_col3 = st.columns([5, 1, 1])
+    question = ai_col1.text_input("Ask AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask AI...")
     
-    if ai_c2.button("🤖", key=f"ask_{word_id}_{tab_key}", help="Ask Gemini"):
-        if not GEMINI_API_KEY: st.error("Add valid API Key!")
+    if ai_col2.button("🤖", key=f"ask_{word_id}_{tab_key}"):
+        if not GEMINI_API_KEY: st.error("Add API Key!")
         elif question:
             with st.spinner(".."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
-                    try: # Try Flash first, fallback to Pro
-                        response = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"Word: {arabic} ({english}). Q: {question}. Answer in 2 short sentences.")
+                    try:
+                        resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"Word: {arabic}. Q: {question}. Answer 1 sentence.")
                     except:
-                        response = genai.GenerativeModel('gemini-pro').generate_content(f"Word: {arabic} ({english}). Q: {question}. Answer in 2 short sentences.")
+                        resp = genai.GenerativeModel('gemini-pro').generate_content(f"Word: {arabic}. Q: {question}. Answer 1 sentence.")
                     
-                    st.session_state[note_key] += f"\nQ: {question}\nAI: {response.text.strip()}\n"
+                    st.session_state[note_key] += f"\nQ: {question}\nAI: {resp.text.strip()}\n"
                     conn.cursor().execute("UPDATE vocab SET notes=? WHERE id=?", (st.session_state[note_key], word_id))
                     conn.commit()
-                except Exception as e: st.error(f"API Error.")
+                except Exception as e: st.error("API Error.")
 
-    if ai_c3.button("💾", key=f"save_{word_id}_{tab_key}", help="Save Note"):
+    if ai_col3.button("💾", key=f"save_{word_id}_{tab_key}"):
         conn.cursor().execute("UPDATE vocab SET notes=? WHERE id=?", (st.session_state[note_key], word_id))
         conn.commit()
-        st.toast("Note Saved!")
+        st.toast("Saved!")
 
-    # Editable Text Box
-    st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=68)
+    st.session_state[note_key] = st.text_area("Edit Notes", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=60)
 
 # --- MAIN APP SETUP ---
-st.markdown("## 🇰🇼 Yalla Kuwaiti!")
-
-if "player_style" not in st.session_state:
-    st.session_state.player_style = "Mini Player"
+st.markdown("### 🇰🇼 Yalla Kuwaiti!")
 
 conn = init_db()
 try:
@@ -182,56 +190,31 @@ try:
     sync_data(conn, df)
 except Exception as e: st.error(f"Sheet Error: {e}")
 
-# Sidebar
-st.sidebar.header("Filter")
-chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != ''").fetchall()]
-selected_chapter = st.sidebar.selectbox("Choose Chapter", ["All Chapters"] + chapters)
-
+# Gamification Stats
 total, mastered, learning, practice = get_stats(conn)
-st.sidebar.divider()
-st.sidebar.markdown("### 🏆 Progress")
-st.sidebar.metric("Mastered", mastered)
-st.sidebar.metric("Needs Practice", practice)
-st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
+st.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
 
-# Main Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"])
+tab1, tab2, tab3 = st.tabs(["🎮 Daily", "🏋️ Practice", "👑 Mastered"])
 
 base_q = "SELECT * FROM vocab"
-params = []
-if selected_chapter != "All Chapters":
-    base_q += " WHERE chapter = ?"
-    params.append(selected_chapter)
 
 with tab1:
-    q1 = base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3")
-    words = conn.cursor().execute(q1, params).fetchall()
+    words = conn.cursor().execute(base_q + " WHERE score < 3").fetchall()
     if words:
         if "current_word" not in st.session_state or st.session_state.current_word is None:
             st.session_state.current_word = random.choice(words)
-        render_flashcard(conn, st.session_state.current_word, "home", st.session_state.player_style)
+        render_flashcard(conn, st.session_state.current_word, "home")
     else:
-        st.success("🎉 You've mastered all words in this section!")
+        st.success("🎉 You've mastered all words!")
 
 with tab2:
-    q2 = base_q + (" AND score = 0" if "WHERE" in base_q else " WHERE score = 0")
-    for w in conn.cursor().execute(q2, params).fetchall():
+    for w in conn.cursor().execute(base_q + " WHERE score = 0").fetchall():
         with st.expander(f"🔴 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"prac_{w[0]}", st.session_state.player_style)
+            render_flashcard(conn, w, f"prac_{w[0]}")
 
 with tab3:
-    q3 = base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3")
-    for w in conn.cursor().execute(q3, params).fetchall():
+    for w in conn.cursor().execute(base_q + " WHERE score >= 3").fetchall():
         with st.expander(f"👑 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"mast_{w[0]}", st.session_state.player_style)
-
-with tab4:
-    st.markdown("### ⚙️ App Preferences")
-    st.session_state.player_style = st.radio(
-        "Audio Player Style:", 
-        options=["Mini Player", "Full Streamlit Player"], 
-        index=0 if st.session_state.player_style == "Mini Player" else 1,
-        help="Mini Player uses a smaller footprint. Full Player uses Streamlit's native audio UI."
-    )
+            render_flashcard(conn, w, f"mast_{w[0]}")
 
 conn.close()
