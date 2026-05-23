@@ -40,7 +40,7 @@ st.markdown(
         
         .arabic-word { text-align: right; font-size: 38px; margin: 0 0 0.1rem 0; line-height: 1.1; }
         
-        /* UPDATED: Wraps text and makes the box taller so you can read notes */
+        /* Wraps text and makes the box taller so you can read notes */
         .note-preview { 
             font-size: 0.85rem; 
             color: #ccc; 
@@ -136,8 +136,8 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    # INLINE HEADER: Adjusted ratios so buttons never get pushed off screen
-    c1, c2, c3 = st.columns([4.5, 1.2, 1.2])
+    # INLINE HEADER: Ultra-safe column ratios so buttons never fall off the screen
+    c1, c2, c3 = st.columns([3, 1, 1])
     c1.markdown(f"<div style='line-height:1.2; margin-bottom:2px;'><b style='font-size:15px;'>{chapter}</b><br><span style='font-size:11px; color:#aaa;'>Score: {score}/3</span></div>", unsafe_allow_html=True)
     
     if c2.button("👍", key=f"up_{word_id}_{tab_key}"):
@@ -170,33 +170,51 @@ def render_flashcard(conn, word_data, tab_key):
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    # 3 Columns: [ Input Box ] [ S.AI ] [ Save ]
-    sa_col1, sa_col2, sa_col3 = st.columns([3.8, 1.1, 1.1])
+    # Ultra-safe ratios: [ Input Box ] [ S.AI ] [ Save ]
+    sa_col1, sa_col2, sa_col3 = st.columns([4, 1.5, 1.5])
     question = sa_col1.text_input("Ask", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI...")
     
     if sa_col2.button("S.AI", key=f"ask_{word_id}_{tab_key}"):
-        if not GEMINI_API_KEY: st.error("Add API key!")
+        if not GEMINI_API_KEY: 
+            st.error("Add API key!")
         elif question:
             with st.spinner(".."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
-                    try: resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context.")
-                    except: resp = genai.GenerativeModel('gemini-pro').generate_content(f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context.")
-                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
-                    # Auto-save when AI answers
-                    save_note(conn, word_id, st.session_state[note_key])
-                    st.toast("AI response added & saved!")
-                    st.rerun() # Refresh to show note in preview
-                except Exception: st.error("S.AI Error.")
+                    prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
+                    
+                    # Waterfall Fallback System
+                    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-pro']
+                    resp = None
+                    last_error = ""
+                    
+                    for model_name in models_to_try:
+                        try:
+                            resp = genai.GenerativeModel(model_name).generate_content(prompt)
+                            if resp: break
+                        except Exception as e:
+                            last_error = str(e)
+                            continue
+                            
+                    if resp:
+                        st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
+                        save_note(conn, word_id, st.session_state[note_key]) # Auto-saves instantly
+                        st.toast("AI response added & saved!")
+                        st.rerun() 
+                    else:
+                        # If all models fail, print the exact error so we can debug
+                        st.error(f"S.AI Error: {last_error}")
+                        
+                except Exception as ex: 
+                    st.error(f"System Error: {ex}")
 
     if sa_col3.button("💾", key=f"quick_save_{word_id}_{tab_key}"):
         save_note(conn, word_id, st.session_state[note_key])
         st.toast("Notes saved!")
 
     # INLINE NOTES VIEWER/EDITOR
-    nt_col1, nt_col2 = st.columns([4.5, 1])
+    nt_col1, nt_col2 = st.columns([5, 1])
     display_text = st.session_state[note_key].strip() or "No notes yet..."
-    # The note-preview class now wraps text and allows internal scrolling
     nt_col1.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
     
     if nt_col2.button("✏️", key=f"edit_btn_{word_id}_{tab_key}"):
