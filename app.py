@@ -5,7 +5,7 @@ from gtts import gTTS
 import io
 import random
 import hashlib
-from google import genai
+import requests
 
 # --- Configuration & Keys ---
 st.set_page_config(page_title="Yalla Kuwaiti!", page_icon="🇰🇼", layout="centered")
@@ -116,6 +116,30 @@ def get_stats(conn):
     learning = total - mastered - practice
     return total, mastered, learning, practice
 
+# --- GEMINI REST API MODULE ---
+def call_gemini_rest(prompt, api_key):
+    """Bypasses SDK hell and uses raw HTTP requests, identical to FlutterFlow."""
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash', 'gemini-1.0-pro']
+    last_err = ""
+    
+    headers = {'Content-Type': 'application/json'}
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            resp = requests.post(url, headers=headers, json=payload)
+            data = resp.json()
+            if resp.status_code == 200:
+                # Success! Parse the JSON like a mobile app would
+                return data['candidates'][0]['content']['parts'][0]['text']
+            else:
+                last_err = data.get('error', {}).get('message', str(data))
+        except Exception as e:
+            last_err = str(e)
+            
+    raise Exception(last_err)
+
 # --- UI COMPONENT MODULE ---
 def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
@@ -123,7 +147,6 @@ def render_flashcard(conn, word_data, tab_key):
     # Header
     st.markdown(f"<div style='font-size:18px; font-weight:bold; margin-bottom:10px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:14px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
     
-    # Native Streamlit Columns (Auto-adjusts safely on mobile)
     btn_col1, btn_col2 = st.columns(2)
     
     if btn_col1.button("👍 Got it", key=f"up_{word_id}_{tab_key}", use_container_width=True):
@@ -167,21 +190,15 @@ def render_flashcard(conn, word_data, tab_key):
         elif question:
             with st.spinner("Thinking..."):
                 try:
-                    # NEW: Updated to use the modern google.genai Client architecture
-                    client = genai.Client(api_key=GEMINI_API_KEY)
                     prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
+                    ai_answer = call_gemini_rest(prompt, GEMINI_API_KEY)
                     
-                    response = client.models.generate_content(
-                        model='gemini-1.5-flash',
-                        contents=prompt,
-                    )
-                    
-                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {response.text.strip()}\n\n"
+                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {ai_answer.strip()}\n\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("AI response added!")
                     st.rerun()
                 except Exception as ex: 
-                    st.error(f"Error: {ex}. Ensure requirements.txt has 'google-genai' and REBOOT app.")
+                    st.error(f"API Error: {ex}")
 
     if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
