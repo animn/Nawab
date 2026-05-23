@@ -5,7 +5,7 @@ from gtts import gTTS
 import io
 import random
 import hashlib
-import google.generativeai as genai
+from google import genai
 
 # --- Configuration & Keys ---
 st.set_page_config(page_title="Yalla Kuwaiti!", page_icon="🇰🇼", layout="centered")
@@ -19,7 +19,6 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEF
 DB_NAME = "learning_progress_v8.db"
 
 # --- SAFE NATIVE CSS ---
-# Removed all height hacks that were causing iOS to render blank boxes
 st.markdown(
     """
     <style>
@@ -168,19 +167,21 @@ def render_flashcard(conn, word_data, tab_key):
         elif question:
             with st.spinner("Thinking..."):
                 try:
-                    genai.configure(api_key=GEMINI_API_KEY)
+                    # NEW: Updated to use the modern google.genai Client architecture
+                    client = genai.Client(api_key=GEMINI_API_KEY)
                     prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
                     
-                    # Call only the modern 1.5 flash model
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    resp = model.generate_content(prompt)
+                    response = client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=prompt,
+                    )
                     
-                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n\n"
+                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {response.text.strip()}\n\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("AI response added!")
                     st.rerun()
                 except Exception as ex: 
-                    st.error(f"Error: {ex}. Please check requirements.txt and REBOOT app.")
+                    st.error(f"Error: {ex}. Ensure requirements.txt has 'google-genai' and REBOOT app.")
 
     if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
