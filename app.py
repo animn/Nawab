@@ -11,7 +11,7 @@ st.set_page_config(page_title="Kuwaiti Lingo", page_icon="🇰🇼", layout="cen
 
 # --- Database & Setup ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress_v3.db" # Updated to v3 for the new Chapter-based structure
+DB_NAME = "learning_progress_v4.db" # Updated to v4 for bulletproof lowercase column matching
 
 # Initialize SQLite Database to save scores permanently
 def init_db():
@@ -19,7 +19,7 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS vocab 
                  (id TEXT PRIMARY KEY, chapter TEXT, arabic TEXT, 
-                  pronunciation TEXT, english TEXT, letter_pronunc TEXT, letter_eng TEXT, score INTEGER)''')
+                  pronunciation TEXT, english TEXT, explanation TEXT, letter_pronunc TEXT, letter_eng TEXT, score INTEGER)''')
     conn.commit()
     return conn
 
@@ -31,30 +31,34 @@ def fetch_sheet_data(url):
 def sync_data(conn, df):
     c = conn.cursor()
     
-    # Strip invisible whitespace from column names just in case
-    df.columns = df.columns.str.strip()
+    # BULLETPROOF FIX: Strip whitespace and make all column names lowercase
+    # This prevents crashes if you type "English Meaning" vs "English meaning"
+    df.columns = df.columns.str.strip().str.lower()
     
     for _, row in df.iterrows():
-        # Skip empty rows safely
-        arabic_text = str(row.get('Arabic Script', ''))
+        # Get the arabic text, using the lowercase column name
+        arabic_text = str(row.get('arabic script', ''))
         if not arabic_text or arabic_text == 'nan':
             continue
             
-        # Create a unique ID for the word based on the Arabic script
         word_id = hashlib.md5(arabic_text.encode()).hexdigest()
+        
+        # Check for different spellings of pronunciation just in case
+        letter_pronunc = str(row.get('letter-wise pronounciation', row.get('letter-wise pronunciation', '')))
         
         # Check if word exists in DB
         c.execute("SELECT id FROM vocab WHERE id=?", (word_id,))
         if not c.fetchone():
-            c.execute('''INSERT INTO vocab (id, chapter, arabic, pronunciation, english, letter_pronunc, letter_eng, score)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+            c.execute('''INSERT INTO vocab (id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
                       (word_id, 
-                       str(row.get('Chapter', '')), 
+                       str(row.get('chapter', '')), 
                        arabic_text, 
-                       str(row.get('Pronunciation', '')), 
-                       str(row.get('English Meaning', '')), 
-                       str(row.get('Letter-wise pronounciation', '')), 
-                       str(row.get('Letter-wise English', '')), 
+                       str(row.get('pronunciation', '')), 
+                       str(row.get('english meaning', '')), 
+                       str(row.get('explanation', '')), # Added back just in case!
+                       letter_pronunc, 
+                       str(row.get('letter-wise english', '')), 
                        0))
     conn.commit()
 
@@ -66,7 +70,6 @@ if "current_word" not in st.session_state:
 
 def get_next_word(conn, chapter):
     c = conn.cursor()
-    # Fetch words that haven't been mastered yet (score < 3)
     c.execute("SELECT * FROM vocab WHERE chapter=? AND score < 3", (chapter,))
     words = c.fetchall()
     
@@ -91,11 +94,10 @@ st.title("🇰🇼 Learn Kuwaiti Arabic")
 conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
-    # Strip whitespace from headers to ensure match
-    df.columns = df.columns.str.strip()
+    # Apply the same bulletproof lowercase fix here for the failsafe
+    df.columns = df.columns.str.strip().str.lower()
     
-    # Failsafe: Ensure 'Chapter' column exists
-    if 'Chapter' not in df.columns:
+    if 'chapter' not in df.columns:
         st.error("🚨 Critical Error: Could not find the 'Chapter' column in your Google Sheet.")
         st.write("Found these columns instead:", list(df.columns))
         st.stop()
@@ -104,7 +106,7 @@ try:
 except Exception as e:
     st.error(f"Error reading Google Sheet: {e}")
 
-# Navigation (Now based on Chapters instead of Levels)
+# Navigation
 st.sidebar.header("Navigation")
 chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != 'nan' AND chapter != ''").fetchall()]
 
@@ -119,8 +121,8 @@ if chapters:
     word = st.session_state.current_word
     
     if word:
-        # DB Columns: 0:id, 1:chapter, 2:arabic, 3:pronunciation, 4:english, 5:letter_pronunc, 6:letter_eng, 7:score
-        word_id, chapter, arabic, pronunc, english, l_pronunc, l_eng, score = word
+        # DB Columns: 0:id, 1:chapter, 2:arabic, 3:pronunciation, 4:english, 5:explanation, 6:letter_pronunc, 7:letter_eng, 8:score
+        word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score = word
         
         st.subheader(f"Chapter: {chapter}")
         st.caption(f"Mastery Score: {score}/3")
@@ -139,15 +141,27 @@ if chapters:
 
             st.divider()
             
+            # Toggle Button
             if st.button(f"🗣️ Click to toggle meaning: **{pronunc}**", use_container_width=True):
                 st.session_state.show_meaning = not st.session_state.show_meaning
 
+            # The English Meaning & Collapsible Breakdown (Only shows if toggled ON)
             if st.session_state.show_meaning:
-                st.success(f"**Meaning:** {english}")
-                if l_pronunc and l_pronunc != 'nan':
-                    st.info(f"**Letter-wise Pronunciation:** {l_pronunc}")
-                if l_eng and l_eng != 'nan':
-                    st.warning(f"**Letter-wise English:** {l_eng}")
+                # Show standard meaning
+                if english and english != 'nan':
+                    st.success(f"**Meaning:** {english}")
+                    
+                # Show explanation if you ever use that column
+                if expl and expl != 'nan':
+                    st.info(f"**Explanation:** {expl}")
+                
+                # Show Letter-wise breakdown in a neat, clickable expander
+                if (l_pronunc and l_pronunc != 'nan') or (l_eng and l_eng != 'nan'):
+                    with st.expander("🔍 Letter-wise Breakdown"):
+                        if l_pronunc and l_pronunc != 'nan':
+                            st.write(f"**Pronunciation:** {l_pronunc}")
+                        if l_eng and l_eng != 'nan':
+                            st.write(f"**English:** {l_eng}")
 
         st.write("How well did you know this?")
         b_col1, b_col2, b_col3 = st.columns([1, 1, 2])
