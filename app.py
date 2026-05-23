@@ -18,40 +18,17 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- AGGRESSIVE COMPRESSION CSS ---
+# --- SAFE MOBILE CSS ---
+# Removed the destructive horizontal flex-wrap hacks that broke the UI
 st.markdown(
     """
     <style>
         .block-container { padding-top: 1.5rem !important; padding-bottom: 0.5rem !important; max-width: 600px; }
-        
-        /* Force buttons to stay on screen and shrink gaps */
-        [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center !important; gap: 0.3rem !important; }
-        [data-testid="column"] { min-width: 0 !important; flex-basis: 0 !important; flex-grow: 1 !important; }
-        [data-testid="stVerticalBlockBorderWrapper"] { padding: 0.4rem !important; }
-        
-        audio { height: 35px !important; width: 100% !important; margin-bottom: 0 !important; }
-        
-        .stButton button, .stTextInput input { 
-            min-height: 36px !important; 
-            height: 36px !important; 
-            padding: 0 4px !important; 
-            font-size: 14px !important; 
-        }
-        
-        .arabic-word { text-align: right; font-size: 42px; margin: 0 0 0.1rem 0; line-height: 1.1; }
-        
-        /* Wraps text and makes the box taller so you can read notes */
-        .note-preview { 
-            font-size: 0.85rem; 
-            color: #ccc; 
-            border: 1px solid #555; 
-            border-radius: 5px; 
-            padding: 6px 8px; 
-            height: 70px; 
-            line-height: 1.3; 
-            overflow-y: auto; 
-            white-space: pre-wrap; 
-        }
+        audio { height: 40px !important; width: 100% !important; margin-bottom: 0 !important; }
+        .stButton button { min-height: 38px !important; height: 38px !important; font-size: 15px !important; }
+        .stTextInput input { min-height: 38px !important; height: 38px !important; font-size: 14px !important; }
+        .arabic-word { text-align: right; font-size: 42px; margin: 0 0 0.5rem 0; line-height: 1.2; }
+        .note-preview { font-size: 0.85rem; color: #ccc; border: 1px solid #555; border-radius: 5px; padding: 8px; height: 75px; line-height: 1.3; overflow-y: auto; white-space: pre-wrap; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -136,13 +113,13 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    # FIX: Move Chapter Title above the buttons so buttons have 100% screen width
-    st.markdown(f"<div style='font-size:16px; font-weight:bold; margin-bottom:5px; margin-top:5px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:13px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
+    # Header
+    st.markdown(f"<div style='font-size:16px; font-weight:bold; margin-bottom:10px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:13px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
     
-    # 50/50 Split for buttons - guarantees they will never fall off the screen
+    # Safe 50/50 Button Split
     btn_col1, btn_col2 = st.columns(2)
     
-    if btn_col1.button("👍 I know this", key=f"up_{word_id}_{tab_key}", use_container_width=True):
+    if btn_col1.button("👍 Got it", key=f"up_{word_id}_{tab_key}", use_container_width=True):
         new_score = update_score(conn, word_id, True)
         st.session_state.flash_toast = f"👍 Score increased to {new_score}/3" if new_score < 3 else "👑 Word Mastered!"
         if tab_key == "home": st.session_state.current_word = None
@@ -154,7 +131,7 @@ def render_flashcard(conn, word_data, tab_key):
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
 
-    # FLASHCARD BODY
+    # Flashcard Body
     with st.container(border=True):
         st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
         audio_bytes = get_audio_bytes(arabic)
@@ -166,62 +143,50 @@ def render_flashcard(conn, word_data, tab_key):
             if l_pronunc: st.write(f"**Sound:** {l_pronunc}")
             if l_eng: st.write(f"**Letters:** {l_eng}")
 
-    # INLINE S.AI TUTOR + SAVE BUTTON
+    # S.AI Tutor Segment
     note_key = f"note_{word_id}_{tab_key}"
     edit_key = f"edit_note_{word_id}_{tab_key}"
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    sa_col1, sa_col2, sa_col3 = st.columns([3.5, 1.2, 1.2])
-    question = sa_col1.text_input("Ask", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI...")
+    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+    question = st.text_input("Ask S.AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI to use this in a sentence...")
     
-    if sa_col2.button("S.AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
+    sa_col1, sa_col2 = st.columns(2)
+    
+    if sa_col1.button("🤖 Ask S.AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
         if not GEMINI_API_KEY: 
             st.error("Add API key!")
         elif question:
-            with st.spinner(".."):
+            with st.spinner("Thinking..."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
                     prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
                     
-                    # FIX: Safest models universally supported
-                    models_to_try = ['gemini-1.5-flash', 'gemini-1.0-pro']
-                    resp = None
-                    last_error = ""
+                    # Clean, direct call to the only model we need
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    resp = model.generate_content(prompt)
                     
-                    for model_name in models_to_try:
-                        try:
-                            resp = genai.GenerativeModel(model_name).generate_content(prompt)
-                            if resp: break
-                        except Exception as e:
-                            last_error = str(e)
-                            continue
-                            
-                    if resp:
-                        st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
-                        save_note(conn, word_id, st.session_state[note_key])
-                        st.toast("AI response added & saved!")
-                        st.rerun() 
-                    else:
-                        st.error(f"API Error: Ensure requirements.txt has google-generativeai>=0.5.2. Detail: {last_error}")
-                        
+                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
+                    save_note(conn, word_id, st.session_state[note_key])
+                    st.toast("AI response added!")
+                    st.rerun()
                 except Exception as ex: 
-                    st.error(f"System Error: {ex}")
+                    st.error(f"API Error. Update requirements.txt to google-generativeai>=0.5.2. Details: {ex}")
 
-    if sa_col3.button("💾", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
+    if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
         st.toast("Notes saved!")
 
-    # INLINE NOTES VIEWER/EDITOR
-    nt_col1, nt_col2 = st.columns([4.5, 1.5])
+    # Notes Display
     display_text = st.session_state[note_key].strip() or "No notes yet..."
-    nt_col1.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
     
-    if nt_col2.button("✏️ Edit", key=f"edit_btn_{word_id}_{tab_key}", use_container_width=True):
+    if st.button("✏️ Edit Notes", key=f"edit_btn_{word_id}_{tab_key}", use_container_width=True):
         st.session_state[edit_key] = not st.session_state[edit_key]
 
     if st.session_state[edit_key]:
-        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=80)
+        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=100)
         if st.button("Save Edits", key=f"save_{word_id}_{tab_key}", use_container_width=True):
             save_note(conn, word_id, st.session_state[note_key])
             st.session_state[edit_key] = False
