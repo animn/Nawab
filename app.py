@@ -19,73 +19,55 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- Compact UI CSS ---
+# --- Mobile-safe UI CSS ---
 st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 1.1rem;
-            padding-bottom: 0.5rem;
+            padding-top: 1rem;
+            padding-bottom: 1rem;
             max-width: 760px;
         }
-        h2, h3, p {
-            margin-top: 0rem;
-            margin-bottom: 0.25rem;
-        }
         div[data-testid="stVerticalBlock"] {
-            gap: 0.35rem;
-        }
-        div[data-testid="stHorizontalBlock"] {
-            gap: 0.35rem;
-            align-items: center;
-        }
-        div[data-testid="column"] {
-            padding: 0rem 0.05rem;
+            gap: 0.55rem;
         }
         .stButton > button {
-            min-height: 2rem;
-            height: 2rem;
-            padding: 0rem 0.45rem;
-            line-height: 1;
-            width: 100%;
-        }
-        .stTextInput input {
-            min-height: 2rem;
-            height: 2rem;
-            padding-top: 0.15rem;
-            padding-bottom: 0.15rem;
+            min-height: 2.4rem;
+            padding: 0.25rem 0.6rem;
         }
         textarea {
-            min-height: 42px !important;
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.25rem !important;
-        }
-        div[data-testid="stExpander"] details summary {
-            padding-top: 0.35rem;
-            padding-bottom: 0.35rem;
-        }
-        div[data-testid="stExpander"] details div[data-testid="stExpanderDetails"] {
-            padding-top: 0.35rem;
-            padding-bottom: 0.35rem;
+            min-height: 52px !important;
         }
         audio {
-            height: 30px !important;
+            width: 100% !important;
+        }
+        .word-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin: 0.15rem 0 0.25rem 0;
+        }
+        .word-chapter {
+            font-size: 0.95rem;
+            font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+        .word-score {
+            font-size: 0.95rem;
+            white-space: nowrap;
+            text-align: right;
         }
         .compact-arabic {
             text-align: right;
-            font-size: 34px;
-            line-height: 1.05;
-            margin: 0;
-        }
-        .compact-meta {
-            font-size: 0.86rem;
+            font-size: 42px;
             line-height: 1.1;
-            margin: 0;
-            white-space: nowrap;
+            margin: 0.25rem 0 0.5rem 0;
         }
-        .score-right {
-            text-align: right;
-            width: 100%;
+        .mini-label {
+            font-size: 0.85rem;
+            opacity: 0.75;
+            margin-bottom: -0.25rem;
         }
     </style>
     """,
@@ -113,7 +95,7 @@ def get_audio_player(text, player_style):
         if player_style == "Mini Player":
             b64 = base64.b64encode(audio_bytes).decode()
             return f'''
-                <audio controls style="height: 30px; width: 100%; border-radius: 5px;">
+                <audio controls style="width: 100%; border-radius: 5px;">
                     <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
                 </audio>
             '''
@@ -144,9 +126,7 @@ def sync_data(conn, df):
         if not arabic_text:
             continue
 
-        chapter = clean_val(row.get('chapter'))
-        english = clean_val(row.get('englishmeaning'))
-        word_id = hashlib.md5(f"{chapter}|{arabic_text}|{english}".encode()).hexdigest()
+        word_id = hashlib.md5(arabic_text.encode()).hexdigest()
         l_pron = clean_val(row.get('letterwisepronounciation', row.get('letterwisepronunciation', '')))
 
         c.execute('''INSERT INTO vocab (id, chapter, arabic, pronunciation, english,
@@ -160,8 +140,8 @@ def sync_data(conn, df):
                         explanation=excluded.explanation,
                         letter_pronunc=excluded.letter_pronunc,
                         letter_eng=excluded.letter_eng''',
-                  (word_id, chapter, arabic_text,
-                   clean_val(row.get('pronunciation')), english,
+                  (word_id, clean_val(row.get('chapter')), arabic_text,
+                   clean_val(row.get('pronunciation')), clean_val(row.get('englishmeaning')),
                    clean_val(row.get('explanation')), l_pron,
                    clean_val(row.get('letterwiseenglish')), 0, ""))
     conn.commit()
@@ -191,33 +171,36 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key, player_style):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    # One-line header: chapter left, thumbs + score right
-    hc1, hc2, hc3, hc4 = st.columns([5.8, 0.65, 0.65, 1.7], vertical_alignment="center")
-    hc1.markdown(f"<div class='compact-meta'><b>{chapter}</b></div>", unsafe_allow_html=True)
-    if hc2.button("👍", key=f"up_{word_id}_{tab_key}", help="I know this"):
+    st.markdown(
+        f"""
+        <div class="word-header">
+            <div class="word-chapter">{chapter}</div>
+            <div class="word-score">Score {score}/3</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    b1, b2 = st.columns(2)
+    if b1.button("👍 I know this", key=f"up_{word_id}_{tab_key}", use_container_width=True):
         update_score(conn, word_id, True)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
-    if hc3.button("👎", key=f"down_{word_id}_{tab_key}", help="Needs practice"):
+    if b2.button("👎 Practice", key=f"down_{word_id}_{tab_key}", use_container_width=True):
         update_score(conn, word_id, False)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
-    hc4.markdown(f"<div class='compact-meta score-right'>Score {score}/3</div>", unsafe_allow_html=True)
 
-    # Compact flashcard body
     with st.container(border=True):
-        f_col1, f_col2 = st.columns([3.5, 2], vertical_alignment="center")
-        f_col1.markdown(f"<h1 class='compact-arabic' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
-
-        with f_col2:
-            audio_data = get_audio_player(arabic, player_style)
-            if audio_data:
-                if player_style == "Mini Player":
-                    st.markdown(audio_data, unsafe_allow_html=True)
-                else:
-                    st.audio(audio_data, format="audio/mp3")
+        st.markdown(f"<h1 class='compact-arabic' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
+        audio_data = get_audio_player(arabic, player_style)
+        if audio_data:
+            if player_style == "Mini Player":
+                st.markdown(audio_data, unsafe_allow_html=True)
+            else:
+                st.audio(audio_data, format="audio/mp3")
 
         with st.expander(f"🗣️ {pronunc} | {english}"):
             if expl:
@@ -228,21 +211,20 @@ def render_flashcard(conn, word_data, tab_key, player_style):
                 if l_eng:
                     st.write(f"**Letter English:** {l_eng}")
 
-    # One compact AI + notes row
     note_key = f"note_{word_id}_{tab_key}"
-    text_key = f"text_{word_id}_{tab_key}"
     if note_key not in st.session_state:
         st.session_state[note_key] = saved_note if saved_note else ""
 
-    ai_c1, ai_c2, ai_c3, ai_c4 = st.columns([4.2, 0.65, 3.2, 0.65], vertical_alignment="center")
-    question = ai_c1.text_input(
+    st.markdown("<div class='mini-label'>AI Tutor</div>", unsafe_allow_html=True)
+    question = st.text_input(
         "Ask AI",
         key=f"q_{word_id}_{tab_key}",
         label_visibility="collapsed",
         placeholder="Ask AI..."
     )
 
-    if ai_c2.button("A", key=f"ask_{word_id}_{tab_key}", help="Ask AI tutor"):
+    ai_btn, save_btn = st.columns(2)
+    if ai_btn.button("A  Ask AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
         if not GEMINI_API_KEY:
             st.error("Add valid Gemini API key in Streamlit secrets.")
         elif question:
@@ -266,18 +248,18 @@ def render_flashcard(conn, word_data, tab_key, player_style):
                 except Exception:
                     st.error("AI error. Please check Gemini API key/model access.")
 
-    st.session_state[note_key] = ai_c3.text_area(
-        "Edit notes",
-        value=st.session_state[note_key],
-        key=text_key,
-        label_visibility="collapsed",
-        placeholder="Notes...",
-        height=42
-    )
-
-    if ai_c4.button("✎", key=f"save_{word_id}_{tab_key}", help="Save note"):
+    if save_btn.button("✎ Save note", key=f"save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
         st.toast("Saved")
+
+    st.session_state[note_key] = st.text_area(
+        "Edit notes",
+        value=st.session_state[note_key],
+        key=f"text_{word_id}_{tab_key}",
+        label_visibility="collapsed",
+        placeholder="Notes...",
+        height=52
+    )
 
 # --- MAIN APP SETUP ---
 st.markdown("## 🇰🇼 Yalla Kuwaiti!")
@@ -306,11 +288,11 @@ st.sidebar.metric("Mastered", mastered)
 st.sidebar.metric("Needs Practice", practice)
 st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
 
-# Use segmented control instead of tabs so Settings does not render Practice/Mastered lists unnecessarily.
-selected_tab = st.segmented_control(
+selected_tab = st.radio(
     "Section",
     options=["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"],
-    default=st.session_state.selected_tab,
+    index=["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"].index(st.session_state.selected_tab),
+    horizontal=True,
     label_visibility="collapsed"
 )
 st.session_state.selected_tab = selected_tab
