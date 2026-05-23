@@ -116,29 +116,47 @@ def get_stats(conn):
     learning = total - mastered - practice
     return total, mastered, learning, practice
 
-# --- GEMINI REST API MODULE ---
-def call_gemini_rest(prompt, api_key):
-    """Bypasses SDK hell and uses raw HTTP requests, identical to FlutterFlow."""
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-2.0-flash', 'gemini-1.0-pro']
-    last_err = ""
+# --- BULLETPROOF DYNAMIC REST API MODULE ---
+def call_gemini_dynamic(prompt, api_key):
+    """Fetches exactly what models Google allows your key to use, then picks the best one."""
     
+    # 1. Ask Google for your authorized models
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    list_resp = requests.get(list_url)
+    if list_resp.status_code != 200:
+        raise Exception(f"Google rejected key entirely: {list_resp.text}")
+
+    models_data = list_resp.json().get('models', [])
+    valid_model_name = None
+    
+    # 2. Scan the list for a Gemini model that supports text generation
+    for m in models_data:
+        name = m.get('name', '')
+        methods = m.get('supportedGenerationMethods', [])
+        
+        if 'gemini' in name.lower() and 'generateContent' in methods:
+            valid_model_name = name # Fallback to any valid model
+            if 'flash' in name.lower():
+                valid_model_name = name # Prioritize flash if it exists
+                break
+                
+    if not valid_model_name:
+        # If this triggers, your Google Cloud project has Generative AI completely disabled
+        raise Exception("Your API key has 0 authorized text models. Check Google AI Studio permissions.")
+
+    # 3. Call the guaranteed-to-work model
+    # Note: 'valid_model_name' already includes the 'models/' prefix (e.g., 'models/gemini-1.5-flash')
+    generate_url = f"https://generativelanguage.googleapis.com/v1beta/{valid_model_name}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    for model in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        try:
-            resp = requests.post(url, headers=headers, json=payload)
-            data = resp.json()
-            if resp.status_code == 200:
-                # Success! Parse the JSON like a mobile app would
-                return data['candidates'][0]['content']['parts'][0]['text']
-            else:
-                last_err = data.get('error', {}).get('message', str(data))
-        except Exception as e:
-            last_err = str(e)
-            
-    raise Exception(last_err)
+    resp = requests.post(generate_url, headers=headers, json=payload)
+    data = resp.json()
+    
+    if resp.status_code == 200:
+        return data['candidates'][0]['content']['parts'][0]['text']
+    else:
+        raise Exception(data.get('error', {}).get('message', str(data)))
 
 # --- UI COMPONENT MODULE ---
 def render_flashcard(conn, word_data, tab_key):
@@ -191,14 +209,16 @@ def render_flashcard(conn, word_data, tab_key):
             with st.spinner("Thinking..."):
                 try:
                     prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
-                    ai_answer = call_gemini_rest(prompt, GEMINI_API_KEY)
+                    
+                    # Triggers the dynamic model finder
+                    ai_answer = call_gemini_dynamic(prompt, GEMINI_API_KEY)
                     
                     st.session_state[note_key] += f"\nQ: {question}\nS.AI: {ai_answer.strip()}\n\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("AI response added!")
                     st.rerun()
                 except Exception as ex: 
-                    st.error(f"API Error: {ex}")
+                    st.error(f"S.AI Error: {ex}")
 
     if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
