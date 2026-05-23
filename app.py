@@ -18,18 +18,18 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- AGGRESSIVE MOBILE CSS OVERRIDE ---
+# --- MOBILE CSS FIXES ---
 st.markdown(
     """
     <style>
-        /* Compress the entire page footprint */
+        /* Give the top header room to breathe so it doesn't get cut off */
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: 3rem !important;
             padding-bottom: 1rem !important;
             max-width: 600px;
         }
         
-        /* Force ALL columns to stay strictly on one line on mobile */
+        /* Force strictly inline layouts for buttons/textboxes */
         [data-testid="stHorizontalBlock"] {
             flex-wrap: nowrap !important;
             align-items: center !important;
@@ -41,7 +41,7 @@ st.markdown(
             flex-grow: 1 !important;
         }
         
-        /* Shrink all buttons and text boxes */
+        /* Compact UI elements */
         .stButton button, .stTextInput input { 
             min-height: 38px !important; 
             height: 38px !important; 
@@ -49,7 +49,7 @@ st.markdown(
             font-size: 14px !important;
         }
         
-        /* Arabic Text Styling */
+        /* Arabic Text */
         .arabic-word {
             text-align: right;
             font-size: 45px;
@@ -57,7 +57,7 @@ st.markdown(
             line-height: 1.2;
         }
         
-        /* Notes Box styling */
+        /* Notes Preview Box */
         .note-preview {
             font-size: 0.85rem;
             color: #ccc;
@@ -153,15 +153,14 @@ def get_stats(conn):
 def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    # INLINE HEADER: Chapter, Score, 👍, 👎
-    c1, c2, c3, c4 = st.columns([4, 2, 1, 1])
-    c1.markdown(f"**{chapter}**")
-    c2.markdown(f"<div style='font-size:12px; margin-top:10px;'>Score: {score}/3</div>", unsafe_allow_html=True)
-    if c3.button("👍", key=f"up_{word_id}_{tab_key}"):
+    # INLINE HEADER: Chapter & Score bundled, 👍, 👎
+    c1, c2, c3 = st.columns([3, 1, 1])
+    c1.markdown(f"**{chapter}** (Score: {score}/3)")
+    if c2.button("👍", key=f"up_{word_id}_{tab_key}"):
         update_score(conn, word_id, True)
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
-    if c4.button("👎", key=f"down_{word_id}_{tab_key}"):
+    if c3.button("👎", key=f"down_{word_id}_{tab_key}"):
         update_score(conn, word_id, False)
         if tab_key == "home": st.session_state.current_word = None
         st.rerun()
@@ -173,23 +172,22 @@ def render_flashcard(conn, word_data, tab_key):
         audio_bytes = get_audio_bytes(arabic)
         if audio_bytes: st.audio(audio_bytes, format="audio/mp3")
         
-        # Clean Expansion Title (No NaNs)
         display_title = f"{pronunc if pronunc else 'Pronunciation'} | {english if english else 'Meaning'}"
         with st.expander(f"🗣️ {display_title}"):
             if expl: st.info(f"**Explanation:** {expl}")
             if l_pronunc: st.write(f"**Letters (Sound):** {l_pronunc}")
             if l_eng: st.write(f"**Letters (English):** {l_eng}")
 
-    # INLINE S.A. TUTOR
+    # INLINE S.AI TUTOR
     note_key = f"note_{word_id}_{tab_key}"
     edit_key = f"edit_note_{word_id}_{tab_key}"
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    sa_col1, sa_col2 = st.columns([5, 1])
-    question = sa_col1.text_input("Ask S.A", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.A a short question...")
+    sa_col1, sa_col2 = st.columns([4, 1])
+    question = sa_col1.text_input("Ask S.AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI a short question...")
     
-    if sa_col2.button("S.A", key=f"ask_{word_id}_{tab_key}"):
+    if sa_col2.button("S.AI", key=f"ask_{word_id}_{tab_key}"):
         if not GEMINI_API_KEY:
             st.error("Add API key!")
         elif question:
@@ -201,14 +199,14 @@ def render_flashcard(conn, word_data, tab_key):
                         resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
                     except:
                         resp = genai.GenerativeModel('gemini-pro').generate_content(prompt)
-                    st.session_state[note_key] += f"\nQ: {question}\nS.A: {resp.text.strip()}\n"
+                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("Note updated!")
                 except Exception:
-                    st.error("S.A Error.")
+                    st.error("S.AI Error.")
 
     # INLINE NOTES VIEWER/EDITOR
-    nt_col1, nt_col2 = st.columns([5, 1])
+    nt_col1, nt_col2 = st.columns([4, 1])
     display_text = st.session_state[note_key].strip() or "No notes yet..."
     nt_col1.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
     
@@ -224,9 +222,7 @@ def render_flashcard(conn, word_data, tab_key):
             st.rerun()
 
 # --- MAIN APP SETUP ---
-st.markdown("### 🇰🇼 Yalla Kuwaiti!")
-
-if "selected_tab" not in st.session_state: st.session_state.selected_tab = "🎮 Daily"
+st.title("🇰🇼 Yalla Kuwaiti!")
 
 conn = init_db()
 try:
@@ -246,9 +242,8 @@ st.sidebar.metric("Mastered", mastered)
 st.sidebar.metric("Needs Practice", practice)
 st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
 
-# Main Tabs Navigation
-tabs = ["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"]
-st.session_state.selected_tab = st.radio("Navigation", options=tabs, index=tabs.index(st.session_state.selected_tab), horizontal=True, label_visibility="collapsed")
+# Native Streamlit Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"])
 
 base_q = "SELECT * FROM vocab"
 params = []
@@ -256,7 +251,7 @@ if selected_chapter != "All":
     base_q += " WHERE chapter = ?"
     params.append(selected_chapter)
 
-if st.session_state.selected_tab == "🎮 Daily":
+with tab1:
     words = conn.cursor().execute(base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3"), params).fetchall()
     if words:
         current = st.session_state.get("current_word")
@@ -267,19 +262,19 @@ if st.session_state.selected_tab == "🎮 Daily":
     else:
         st.success("🎉 Section fully mastered!")
 
-elif st.session_state.selected_tab == "🏋️ Practice":
+with tab2:
     rows = conn.cursor().execute(base_q + (" AND score = 0" if "WHERE" in base_q else " WHERE score = 0"), params).fetchall()
     for w in rows[:20]:
         with st.expander(f"🔴 {w[2]} ({w[4]})"):
             render_flashcard(conn, w, f"prac_{w[0]}")
 
-elif st.session_state.selected_tab == "👑 Mastered":
+with tab3:
     rows = conn.cursor().execute(base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3"), params).fetchall()
     for w in rows[:20]:
         with st.expander(f"👑 {w[2]} ({w[4]})"):
             render_flashcard(conn, w, f"mast_{w[0]}")
 
-elif st.session_state.selected_tab == "⚙️ Settings":
+with tab4:
     st.info("Mobile UI overrides are active. The layout is optimized to prevent button stacking.")
     if st.button("Refresh Spreadsheet Data"):
         fetch_sheet_data.clear()
