@@ -18,40 +18,56 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- Clean mobile-safe CSS ---
+# --- AGGRESSIVE MOBILE CSS OVERRIDE ---
 st.markdown(
     """
     <style>
+        /* Compress the entire page footprint */
         .block-container {
-            padding-top: 0.85rem;
-            padding-bottom: 1rem;
-            max-width: 760px;
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+            max-width: 600px;
         }
-        div[data-testid="stVerticalBlock"] { gap: 0.55rem; }
-        .word-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            margin: 0.25rem 0 0.2rem 0;
+        
+        /* Force ALL columns to stay strictly on one line on mobile */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            align-items: center !important;
+            gap: 0.3rem !important;
         }
-        .word-chapter { font-size: 1rem; font-weight: 700; overflow-wrap: anywhere; }
-        .word-score { font-size: 0.95rem; white-space: nowrap; text-align: right; }
+        [data-testid="column"] {
+            min-width: 0 !important;
+            flex-basis: 0 !important;
+            flex-grow: 1 !important;
+        }
+        
+        /* Shrink all buttons and text boxes */
+        .stButton button, .stTextInput input { 
+            min-height: 38px !important; 
+            height: 38px !important; 
+            padding: 0 !important; 
+            font-size: 14px !important;
+        }
+        
+        /* Arabic Text Styling */
         .arabic-word {
             text-align: right;
-            font-size: 42px;
-            line-height: 1.15;
-            margin: 0.2rem 0 0.55rem 0;
+            font-size: 45px;
+            margin: 0.2rem 0 0.5rem 0;
+            line-height: 1.2;
         }
+        
+        /* Notes Box styling */
         .note-preview {
-            font-size: 0.9rem;
-            opacity: 0.86;
-            border: 1px solid rgba(128,128,128,0.35);
-            border-radius: 0.5rem;
-            padding: 0.5rem 0.65rem;
-            min-height: 2.4rem;
-            max-height: 4.2rem;
+            font-size: 0.85rem;
+            color: #ccc;
+            border: 1px solid #555;
+            border-radius: 5px;
+            padding: 8px;
+            height: 38px;
             overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
     </style>
     """,
@@ -60,13 +76,13 @@ st.markdown(
 
 # --- HELPER FUNCTIONS ---
 def clean_val(val):
-    """Prevents 'nan' from showing up in the UI and crashing the app."""
     if pd.isna(val) or str(val).strip().lower() == 'nan':
         return ""
     return str(val).strip()
 
 @st.cache_data(show_spinner=False)
 def get_audio_bytes(text):
+    text = clean_val(text)
     if not text:
         return None
     try:
@@ -97,8 +113,7 @@ def sync_data(conn, df):
     df.columns = df.columns.str.replace(r'[^a-zA-Z0-9]', '', regex=True).str.lower()
     for _, row in df.iterrows():
         arabic_text = clean_val(row.get('arabicscript', ''))
-        if not arabic_text:
-            continue
+        if not arabic_text: continue
 
         word_id = hashlib.md5(arabic_text.encode()).hexdigest()
         l_pron = clean_val(row.get('letterwisepronounciation', row.get('letterwisepronunciation', '')))
@@ -107,26 +122,19 @@ def sync_data(conn, df):
                                         explanation, letter_pronunc, letter_eng, score, notes)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO UPDATE SET
-                        chapter=excluded.chapter,
-                        arabic=excluded.arabic,
-                        pronunciation=excluded.pronunciation,
-                        english=excluded.english,
-                        explanation=excluded.explanation,
-                        letter_pronunc=excluded.letter_pronunc,
-                        letter_eng=excluded.letter_eng''',
-                  (word_id, clean_val(row.get('chapter')), arabic_text,
-                   clean_val(row.get('pronunciation')), clean_val(row.get('englishmeaning')),
-                   clean_val(row.get('explanation')), l_pron,
+                        chapter=excluded.chapter, arabic=excluded.arabic, pronunciation=excluded.pronunciation,
+                        english=excluded.english, explanation=excluded.explanation,
+                        letter_pronunc=excluded.letter_pronunc, letter_eng=excluded.letter_eng''',
+                  (word_id, clean_val(row.get('chapter')), arabic_text, clean_val(row.get('pronunciation')), 
+                   clean_val(row.get('englishmeaning')), clean_val(row.get('explanation')), l_pron,
                    clean_val(row.get('letterwiseenglish')), 0, ""))
     conn.commit()
 
 def update_score(conn, word_id, is_correct):
     c = conn.cursor()
     row = c.execute("SELECT score FROM vocab WHERE id=?", (word_id,)).fetchone()
-    if not row:
-        return
-    current_score = row[0] or 0
-    new_score = current_score + 1 if is_correct else 0
+    if not row: return
+    new_score = (row[0] or 0) + 1 if is_correct else 0
     c.execute("UPDATE vocab SET score=? WHERE id=?", (new_score, word_id))
     conn.commit()
 
@@ -142,185 +150,138 @@ def get_stats(conn):
     return total, mastered, total - mastered - practice, practice
 
 # --- UI COMPONENT MODULE ---
-def render_flashcard(conn, word_data, tab_key, player_style):
+def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
-    st.markdown(
-        f"""
-        <div class="word-header">
-            <div class="word-chapter">{chapter}</div>
-            <div class="word-score">Score {score}/3</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    vote_c1, vote_c2 = st.columns(2)
-    if vote_c1.button("👍", key=f"up_{word_id}_{tab_key}", use_container_width=True, help="I know this"):
+    # INLINE HEADER: Chapter, Score, 👍, 👎
+    c1, c2, c3, c4 = st.columns([4, 2, 1, 1])
+    c1.markdown(f"**{chapter}**")
+    c2.markdown(f"<div style='font-size:12px; margin-top:10px;'>Score: {score}/3</div>", unsafe_allow_html=True)
+    if c3.button("👍", key=f"up_{word_id}_{tab_key}"):
         update_score(conn, word_id, True)
-        if tab_key == "home":
-            st.session_state.current_word = None
+        if tab_key == "home": st.session_state.current_word = None
         st.rerun()
-    if vote_c2.button("👎", key=f"down_{word_id}_{tab_key}", use_container_width=True, help="Needs practice"):
+    if c4.button("👎", key=f"down_{word_id}_{tab_key}"):
         update_score(conn, word_id, False)
-        if tab_key == "home":
-            st.session_state.current_word = None
+        if tab_key == "home": st.session_state.current_word = None
         st.rerun()
 
+    # FLASHCARD BODY
     with st.container(border=True):
         st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
+        
         audio_bytes = get_audio_bytes(arabic)
-        if audio_bytes:
-            st.audio(audio_bytes, format="audio/mp3")
-        else:
-            st.caption("Audio unavailable")
+        if audio_bytes: st.audio(audio_bytes, format="audio/mp3")
+        
+        # Clean Expansion Title (No NaNs)
+        display_title = f"{pronunc if pronunc else 'Pronunciation'} | {english if english else 'Meaning'}"
+        with st.expander(f"🗣️ {display_title}"):
+            if expl: st.info(f"**Explanation:** {expl}")
+            if l_pronunc: st.write(f"**Letters (Sound):** {l_pronunc}")
+            if l_eng: st.write(f"**Letters (English):** {l_eng}")
 
-        with st.expander(f"🗣️ {pronunc} | {english}"):
-            if expl:
-                st.info(f"**Explanation:** {expl}")
-            if l_pronunc or l_eng:
-                if l_pronunc:
-                    st.write(f"**Letter pronunciation:** {l_pronunc}")
-                if l_eng:
-                    st.write(f"**Letter English:** {l_eng}")
-
+    # INLINE S.A. TUTOR
     note_key = f"note_{word_id}_{tab_key}"
     edit_key = f"edit_note_{word_id}_{tab_key}"
-    if note_key not in st.session_state:
-        st.session_state[note_key] = saved_note if saved_note else ""
-    if edit_key not in st.session_state:
-        st.session_state[edit_key] = False
+    if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
+    if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    sa_input, sa_button = st.columns([4, 1])
-    question = sa_input.text_input(
-        "S.A",
-        key=f"q_{word_id}_{tab_key}",
-        label_visibility="collapsed",
-        placeholder="S.A..."
-    )
-
-    if sa_button.button("S.A", key=f"ask_{word_id}_{tab_key}", use_container_width=True, help="Ask S.A"):
+    sa_col1, sa_col2 = st.columns([5, 1])
+    question = sa_col1.text_input("Ask S.A", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.A a short question...")
+    
+    if sa_col2.button("S.A", key=f"ask_{word_id}_{tab_key}"):
         if not GEMINI_API_KEY:
-            st.error("Add valid Gemini API key in Streamlit secrets.")
+            st.error("Add API key!")
         elif question:
-            with st.spinner("S.A..."):
+            with st.spinner(".."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
-                    prompt = f"""
-                    You are a Kuwaiti Arabic tutor.
-                    Arabic word: {arabic}
-                    Meaning: {english}
-                    Student question: {question}
-                    Answer in simple English. Focus on Kuwaiti dialect. Keep it under 4 lines.
-                    """
+                    prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
                     try:
-                        response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
-                    except Exception:
-                        response = genai.GenerativeModel('gemini-pro').generate_content(prompt)
-                    answer = response.text.strip()
-                    st.session_state[note_key] += f"\nQ: {question}\nS.A: {answer}\n"
+                        resp = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+                    except:
+                        resp = genai.GenerativeModel('gemini-pro').generate_content(prompt)
+                    st.session_state[note_key] += f"\nQ: {question}\nS.A: {resp.text.strip()}\n"
                     save_note(conn, word_id, st.session_state[note_key])
-                    st.toast("Saved to notes")
+                    st.toast("Note updated!")
                 except Exception:
-                    st.error("S.A error. Please check Gemini API key/model access.")
+                    st.error("S.A Error.")
 
-    note_col, edit_col = st.columns([4, 1])
-    note_preview = st.session_state[note_key].strip() or "Notes..."
-    note_col.markdown(f"<div class='note-preview'>{note_preview[-220:]}</div>", unsafe_allow_html=True)
-    if edit_col.button("✎", key=f"edit_{word_id}_{tab_key}", use_container_width=True, help="Edit notes"):
+    # INLINE NOTES VIEWER/EDITOR
+    nt_col1, nt_col2 = st.columns([5, 1])
+    display_text = st.session_state[note_key].strip() or "No notes yet..."
+    nt_col1.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
+    
+    if nt_col2.button("✏️", key=f"edit_btn_{word_id}_{tab_key}"):
         st.session_state[edit_key] = not st.session_state[edit_key]
 
     if st.session_state[edit_key]:
-        st.session_state[note_key] = st.text_area(
-            "Edit notes",
-            value=st.session_state[note_key],
-            key=f"text_{word_id}_{tab_key}",
-            label_visibility="collapsed",
-            placeholder="Notes...",
-            height=90
-        )
-        if st.button("Save note", key=f"save_{word_id}_{tab_key}", use_container_width=True):
+        st.session_state[note_key] = st.text_area("Edit notes", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=70)
+        if st.button("💾 Save", key=f"save_{word_id}_{tab_key}", use_container_width=True):
             save_note(conn, word_id, st.session_state[note_key])
             st.session_state[edit_key] = False
             st.toast("Saved")
             st.rerun()
 
 # --- MAIN APP SETUP ---
-st.markdown("## 🇰🇼 Yalla Kuwaiti!")
+st.markdown("### 🇰🇼 Yalla Kuwaiti!")
 
-if "selected_tab" not in st.session_state:
-    st.session_state.selected_tab = "🎮 Daily"
+if "selected_tab" not in st.session_state: st.session_state.selected_tab = "🎮 Daily"
 
 conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
     sync_data(conn, df)
-except Exception as e:
-    st.error(f"Sheet Error: {e}")
+except Exception as e: st.error("Spreadsheet error. Check access.")
 
-# Sidebar
-st.sidebar.header("Filter")
+# Sidebar Stats
+st.sidebar.header("Filters")
 chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != '' ORDER BY chapter").fetchall()]
-selected_chapter = st.sidebar.selectbox("Choose Chapter", ["All Chapters"] + chapters)
+selected_chapter = st.sidebar.selectbox("Chapter", ["All"] + chapters)
 
 total, mastered, learning, practice = get_stats(conn)
 st.sidebar.divider()
-st.sidebar.markdown("### 🏆 Progress")
+st.sidebar.markdown("🏆 **Progress**")
 st.sidebar.metric("Mastered", mastered)
 st.sidebar.metric("Needs Practice", practice)
 st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
 
-selected_tab = st.radio(
-    "Section",
-    options=["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"],
-    index=["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"].index(st.session_state.selected_tab),
-    horizontal=True,
-    label_visibility="collapsed"
-)
-st.session_state.selected_tab = selected_tab
+# Main Tabs Navigation
+tabs = ["🎮 Daily", "🏋️ Practice", "👑 Mastered", "⚙️ Settings"]
+st.session_state.selected_tab = st.radio("Navigation", options=tabs, index=tabs.index(st.session_state.selected_tab), horizontal=True, label_visibility="collapsed")
 
 base_q = "SELECT * FROM vocab"
 params = []
-if selected_chapter != "All Chapters":
+if selected_chapter != "All":
     base_q += " WHERE chapter = ?"
     params.append(selected_chapter)
 
-if selected_tab == "🎮 Daily":
-    q1 = base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3")
-    words = conn.cursor().execute(q1, params).fetchall()
+if st.session_state.selected_tab == "🎮 Daily":
+    words = conn.cursor().execute(base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3"), params).fetchall()
     if words:
         current = st.session_state.get("current_word")
         valid_ids = {w[0] for w in words}
         if current is None or current[0] not in valid_ids:
             st.session_state.current_word = random.choice(words)
-        render_flashcard(conn, st.session_state.current_word, "home", "Full Streamlit Player")
+        render_flashcard(conn, st.session_state.current_word, "home")
     else:
-        st.success("🎉 You've mastered all words in this section!")
+        st.success("🎉 Section fully mastered!")
 
-elif selected_tab == "🏋️ Practice":
-    q2 = base_q + (" AND score = 0" if "WHERE" in base_q else " WHERE score = 0")
-    rows = conn.cursor().execute(q2, params).fetchall()
-    st.caption(f"Showing {len(rows)} practice words")
-    for w in rows[:25]:
+elif st.session_state.selected_tab == "🏋️ Practice":
+    rows = conn.cursor().execute(base_q + (" AND score = 0" if "WHERE" in base_q else " WHERE score = 0"), params).fetchall()
+    for w in rows[:20]:
         with st.expander(f"🔴 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"prac_{w[0]}", "Full Streamlit Player")
-    if len(rows) > 25:
-        st.info("Showing first 25 only to keep the page fast. Choose a chapter to narrow the list.")
+            render_flashcard(conn, w, f"prac_{w[0]}")
 
-elif selected_tab == "👑 Mastered":
-    q3 = base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3")
-    rows = conn.cursor().execute(q3, params).fetchall()
-    st.caption(f"Showing {len(rows)} mastered words")
-    for w in rows[:25]:
+elif st.session_state.selected_tab == "👑 Mastered":
+    rows = conn.cursor().execute(base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3"), params).fetchall()
+    for w in rows[:20]:
         with st.expander(f"👑 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"mast_{w[0]}", "Full Streamlit Player")
-    if len(rows) > 25:
-        st.info("Showing first 25 only to keep the page fast. Choose a chapter to narrow the list.")
+            render_flashcard(conn, w, f"mast_{w[0]}")
 
-elif selected_tab == "⚙️ Settings":
-    st.markdown("### ⚙️ App Preferences")
-    st.info("Clean mobile layout restored. The audio player now uses Streamlit's stable native player to avoid broken mobile rendering.")
-    if st.button("Refresh sheet data"):
+elif st.session_state.selected_tab == "⚙️ Settings":
+    st.info("Mobile UI overrides are active. The layout is optimized to prevent button stacking.")
+    if st.button("Refresh Spreadsheet Data"):
         fetch_sheet_data.clear()
         st.session_state.current_word = None
         st.rerun()
