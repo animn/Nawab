@@ -5,7 +5,6 @@ from gtts import gTTS
 import io
 import random
 import hashlib
-import base64
 import google.generativeai as genai
 
 # --- Configuration & Keys ---
@@ -19,75 +18,39 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- Mobile-first compact UI CSS ---
+# --- Clean mobile-safe CSS ---
 st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 0.75rem;
-            padding-bottom: 0.75rem;
+            padding-top: 0.85rem;
+            padding-bottom: 1rem;
             max-width: 760px;
         }
-        h2, h3, p { margin-top: 0rem; margin-bottom: 0.2rem; }
-        div[data-testid="stVerticalBlock"] { gap: 0.36rem; }
-        div[data-testid="stHorizontalBlock"] { gap: 0.32rem; align-items: center; }
-        div[data-testid="column"] { padding: 0rem 0.03rem; }
-        .stButton > button {
-            min-height: 2.05rem;
-            height: 2.05rem;
-            padding: 0rem 0.35rem;
-            line-height: 1;
-            width: 100%;
-            font-size: 0.92rem;
-        }
-        .stTextInput input {
-            min-height: 2.05rem;
-            height: 2.05rem;
-            padding-top: 0.1rem;
-            padding-bottom: 0.1rem;
-            font-size: 0.94rem;
-        }
-        textarea {
-            min-height: 44px !important;
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.25rem !important;
-            font-size: 0.9rem !important;
-        }
-        div[data-testid="stExpander"] details summary {
-            padding-top: 0.32rem;
-            padding-bottom: 0.32rem;
-        }
+        div[data-testid="stVerticalBlock"] { gap: 0.55rem; }
         .word-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 8px;
-            margin: 0.05rem 0 0.1rem 0;
+            gap: 10px;
+            margin: 0.25rem 0 0.2rem 0;
         }
-        .word-chapter { font-size: 0.92rem; font-weight: 700; overflow-wrap: anywhere; }
-        .word-score { font-size: 0.88rem; white-space: nowrap; text-align: right; }
-        .compact-arabic {
+        .word-chapter { font-size: 1rem; font-weight: 700; overflow-wrap: anywhere; }
+        .word-score { font-size: 0.95rem; white-space: nowrap; text-align: right; }
+        .arabic-word {
             text-align: right;
-            font-size: 34px;
-            line-height: 1.05;
-            margin: 0.05rem 0 0.25rem 0;
-        }
-        .mini-audio-wrap {
-            width: 1px;
-            height: 1px;
-            overflow: hidden;
-            opacity: 0.01;
-            position: absolute;
-            pointer-events: none;
+            font-size: 42px;
+            line-height: 1.15;
+            margin: 0.2rem 0 0.55rem 0;
         }
         .note-preview {
-            font-size: 0.82rem;
-            opacity: 0.82;
+            font-size: 0.9rem;
+            opacity: 0.86;
             border: 1px solid rgba(128,128,128,0.35);
             border-radius: 0.5rem;
-            padding: 0.4rem 0.55rem;
-            min-height: 2.05rem;
-            max-height: 2.6rem;
+            padding: 0.5rem 0.65rem;
+            min-height: 2.4rem;
+            max-height: 4.2rem;
             overflow: hidden;
         }
     </style>
@@ -113,28 +76,6 @@ def get_audio_bytes(text):
         return fp.getvalue()
     except Exception:
         return None
-
-def render_mini_audio(audio_bytes, word_id):
-    if not audio_bytes:
-        st.caption("Audio unavailable")
-        return
-    b64 = base64.b64encode(audio_bytes).decode()
-    audio_id = f"aud_{word_id}"
-    st.markdown(
-        f"""
-        <div style="display:flex; gap:8px; align-items:center; width:100%;">
-            <button onclick="const a=document.getElementById('{audio_id}'); a.currentTime=0; a.play();" style="height:34px; min-width:62px; border-radius:8px; border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit; font-size:15px;">▶</button>
-            <select onchange="document.getElementById('{audio_id}').playbackRate=parseFloat(this.value);" style="height:34px; min-width:68px; border-radius:8px; border:1px solid rgba(128,128,128,.45); background:transparent; color:inherit; font-size:14px;">
-                <option value="0.75">0.75x</option>
-                <option value="1" selected>1x</option>
-                <option value="1.25">1.25x</option>
-                <option value="1.5">1.5x</option>
-            </select>
-            <audio id="{audio_id}" preload="auto" src="data:audio/mp3;base64,{b64}"></audio>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 # --- DATABASE MODULE ---
 def init_db():
@@ -214,28 +155,25 @@ def render_flashcard(conn, word_data, tab_key, player_style):
         unsafe_allow_html=True,
     )
 
-    b1, b2 = st.columns([1, 1])
-    if b1.button("👍", key=f"up_{word_id}_{tab_key}", use_container_width=True, help="I know this"):
+    vote_c1, vote_c2 = st.columns(2)
+    if vote_c1.button("👍", key=f"up_{word_id}_{tab_key}", use_container_width=True, help="I know this"):
         update_score(conn, word_id, True)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
-    if b2.button("👎", key=f"down_{word_id}_{tab_key}", use_container_width=True, help="Needs practice"):
+    if vote_c2.button("👎", key=f"down_{word_id}_{tab_key}", use_container_width=True, help="Needs practice"):
         update_score(conn, word_id, False)
         if tab_key == "home":
             st.session_state.current_word = None
         st.rerun()
 
     with st.container(border=True):
-        st.markdown(f"<h1 class='compact-arabic' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
         audio_bytes = get_audio_bytes(arabic)
-        if player_style == "Mini Player":
-            render_mini_audio(audio_bytes, word_id)
+        if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3")
         else:
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3")
-            else:
-                st.caption("Audio unavailable")
+            st.caption("Audio unavailable")
 
         with st.expander(f"🗣️ {pronunc} | {english}"):
             if expl:
@@ -253,7 +191,7 @@ def render_flashcard(conn, word_data, tab_key, player_style):
     if edit_key not in st.session_state:
         st.session_state[edit_key] = False
 
-    sa_input, sa_button = st.columns([5, 1.05])
+    sa_input, sa_button = st.columns([4, 1])
     question = sa_input.text_input(
         "S.A",
         key=f"q_{word_id}_{tab_key}",
@@ -286,9 +224,9 @@ def render_flashcard(conn, word_data, tab_key, player_style):
                 except Exception:
                     st.error("S.A error. Please check Gemini API key/model access.")
 
-    note_col, edit_col = st.columns([5, 1.05])
+    note_col, edit_col = st.columns([4, 1])
     note_preview = st.session_state[note_key].strip() or "Notes..."
-    note_col.markdown(f"<div class='note-preview'>{note_preview[-160:]}</div>", unsafe_allow_html=True)
+    note_col.markdown(f"<div class='note-preview'>{note_preview[-220:]}</div>", unsafe_allow_html=True)
     if edit_col.button("✎", key=f"edit_{word_id}_{tab_key}", use_container_width=True, help="Edit notes"):
         st.session_state[edit_key] = not st.session_state[edit_key]
 
@@ -299,9 +237,9 @@ def render_flashcard(conn, word_data, tab_key, player_style):
             key=f"text_{word_id}_{tab_key}",
             label_visibility="collapsed",
             placeholder="Notes...",
-            height=54
+            height=90
         )
-        if st.button("Save", key=f"save_{word_id}_{tab_key}", use_container_width=True):
+        if st.button("Save note", key=f"save_{word_id}_{tab_key}", use_container_width=True):
             save_note(conn, word_id, st.session_state[note_key])
             st.session_state[edit_key] = False
             st.toast("Saved")
@@ -310,8 +248,6 @@ def render_flashcard(conn, word_data, tab_key, player_style):
 # --- MAIN APP SETUP ---
 st.markdown("## 🇰🇼 Yalla Kuwaiti!")
 
-if "player_style" not in st.session_state:
-    st.session_state.player_style = "Mini Player"
 if "selected_tab" not in st.session_state:
     st.session_state.selected_tab = "🎮 Daily"
 
@@ -357,7 +293,7 @@ if selected_tab == "🎮 Daily":
         valid_ids = {w[0] for w in words}
         if current is None or current[0] not in valid_ids:
             st.session_state.current_word = random.choice(words)
-        render_flashcard(conn, st.session_state.current_word, "home", st.session_state.player_style)
+        render_flashcard(conn, st.session_state.current_word, "home", "Full Streamlit Player")
     else:
         st.success("🎉 You've mastered all words in this section!")
 
@@ -367,7 +303,7 @@ elif selected_tab == "🏋️ Practice":
     st.caption(f"Showing {len(rows)} practice words")
     for w in rows[:25]:
         with st.expander(f"🔴 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"prac_{w[0]}", st.session_state.player_style)
+            render_flashcard(conn, w, f"prac_{w[0]}", "Full Streamlit Player")
     if len(rows) > 25:
         st.info("Showing first 25 only to keep the page fast. Choose a chapter to narrow the list.")
 
@@ -377,19 +313,13 @@ elif selected_tab == "👑 Mastered":
     st.caption(f"Showing {len(rows)} mastered words")
     for w in rows[:25]:
         with st.expander(f"👑 {w[2]} ({w[4]})"):
-            render_flashcard(conn, w, f"mast_{w[0]}", st.session_state.player_style)
+            render_flashcard(conn, w, f"mast_{w[0]}", "Full Streamlit Player")
     if len(rows) > 25:
         st.info("Showing first 25 only to keep the page fast. Choose a chapter to narrow the list.")
 
 elif selected_tab == "⚙️ Settings":
     st.markdown("### ⚙️ App Preferences")
-    st.session_state.player_style = st.radio(
-        "Audio Player Style:",
-        options=["Mini Player", "Full Streamlit Player"],
-        index=0 if st.session_state.player_style == "Mini Player" else 1,
-        horizontal=True,
-        help="Mini Player shows only Play + speed. Full Player uses Streamlit's native audio UI."
-    )
+    st.info("Clean mobile layout restored. The audio player now uses Streamlit's stable native player to avoid broken mobile rendering.")
     if st.button("Refresh sheet data"):
         fetch_sheet_data.clear()
         st.session_state.current_word = None
