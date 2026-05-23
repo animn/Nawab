@@ -18,17 +18,25 @@ except KeyError:
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
 DB_NAME = "learning_progress_v8.db"
 
-# --- SAFE MOBILE CSS ---
-# Removed the destructive horizontal flex-wrap hacks that broke the UI
+# --- SAFE NATIVE CSS ---
+# Removed all height hacks that were causing iOS to render blank boxes
 st.markdown(
     """
     <style>
-        .block-container { padding-top: 1.5rem !important; padding-bottom: 0.5rem !important; max-width: 600px; }
-        audio { height: 40px !important; width: 100% !important; margin-bottom: 0 !important; }
-        .stButton button { min-height: 38px !important; height: 38px !important; font-size: 15px !important; }
-        .stTextInput input { min-height: 38px !important; height: 38px !important; font-size: 14px !important; }
+        .block-container { padding-top: 2rem !important; padding-bottom: 1rem !important; max-width: 600px; }
+        audio { height: 45px !important; width: 100% !important; margin-bottom: 0 !important; }
         .arabic-word { text-align: right; font-size: 42px; margin: 0 0 0.5rem 0; line-height: 1.2; }
-        .note-preview { font-size: 0.85rem; color: #ccc; border: 1px solid #555; border-radius: 5px; padding: 8px; height: 75px; line-height: 1.3; overflow-y: auto; white-space: pre-wrap; }
+        .note-preview { 
+            font-size: 0.9rem; 
+            color: #ddd; 
+            border: 1px solid #555; 
+            border-radius: 5px; 
+            padding: 10px; 
+            min-height: 80px; 
+            max-height: 150px;
+            overflow-y: auto; 
+            white-space: pre-wrap; 
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -114,9 +122,9 @@ def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
     # Header
-    st.markdown(f"<div style='font-size:16px; font-weight:bold; margin-bottom:10px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:13px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:18px; font-weight:bold; margin-bottom:10px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:14px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
     
-    # Safe 50/50 Button Split
+    # Native Streamlit Columns (Auto-adjusts safely on mobile)
     btn_col1, btn_col2 = st.columns(2)
     
     if btn_col1.button("👍 Got it", key=f"up_{word_id}_{tab_key}", use_container_width=True):
@@ -149,30 +157,30 @@ def render_flashcard(conn, word_data, tab_key):
     if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
     if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-    question = st.text_input("Ask S.AI", key=f"q_{word_id}_{tab_key}", label_visibility="collapsed", placeholder="Ask S.AI to use this in a sentence...")
+    st.markdown("<br>", unsafe_allow_html=True)
+    question = st.text_input("Ask S.AI a question", key=f"q_{word_id}_{tab_key}", placeholder="E.g., Use this word in a sentence...")
     
     sa_col1, sa_col2 = st.columns(2)
     
     if sa_col1.button("🤖 Ask S.AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
         if not GEMINI_API_KEY: 
-            st.error("Add API key!")
+            st.error("Add API key in Streamlit Secrets!")
         elif question:
             with st.spinner("Thinking..."):
                 try:
                     genai.configure(api_key=GEMINI_API_KEY)
                     prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
                     
-                    # Clean, direct call to the only model we need
+                    # Call only the modern 1.5 flash model
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     resp = model.generate_content(prompt)
                     
-                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n"
+                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {resp.text.strip()}\n\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("AI response added!")
                     st.rerun()
                 except Exception as ex: 
-                    st.error(f"API Error. Update requirements.txt to google-generativeai>=0.5.2. Details: {ex}")
+                    st.error(f"Error: {ex}. Please check requirements.txt and REBOOT app.")
 
     if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
         save_note(conn, word_id, st.session_state[note_key])
@@ -186,7 +194,7 @@ def render_flashcard(conn, word_data, tab_key):
         st.session_state[edit_key] = not st.session_state[edit_key]
 
     if st.session_state[edit_key]:
-        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=100)
+        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=120)
         if st.button("Save Edits", key=f"save_{word_id}_{tab_key}", use_container_width=True):
             save_note(conn, word_id, st.session_state[note_key])
             st.session_state[edit_key] = False
@@ -198,7 +206,7 @@ if "flash_toast" in st.session_state:
     st.toast(st.session_state.flash_toast)
     del st.session_state.flash_toast
 
-st.markdown("### 🇰🇼 Yalla Kuwaiti!")
+st.markdown("## 🇰🇼 Yalla Kuwaiti!")
 
 conn = init_db()
 try:
