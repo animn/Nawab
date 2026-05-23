@@ -11,7 +11,7 @@ st.set_page_config(page_title="Kuwaiti Lingo", page_icon="🇰🇼", layout="cen
 
 # --- Database & Setup ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1DQ_74TZtMpbinusdnMOU2441hEFa7RRnaqeMx8qrBg0/export?format=csv"
-DB_NAME = "learning_progress_v4.db" # Updated to v4 for bulletproof lowercase column matching
+DB_NAME = "learning_progress_v5.db" # Updated to v5 for Regex column cleaning
 
 # Initialize SQLite Database to save scores permanently
 def init_db():
@@ -31,20 +31,19 @@ def fetch_sheet_data(url):
 def sync_data(conn, df):
     c = conn.cursor()
     
-    # BULLETPROOF FIX: Strip whitespace and make all column names lowercase
-    # This prevents crashes if you type "English Meaning" vs "English meaning"
-    df.columns = df.columns.str.strip().str.lower()
+    # THE ULTIMATE FIX: This removes ALL spaces, hyphens, and invisible Apple/iPad characters
+    # "English Meaning" safely becomes "englishmeaning"
+    df.columns = df.columns.str.replace(r'[^a-zA-Z0-9]', '', regex=True).str.lower()
     
     for _, row in df.iterrows():
-        # Get the arabic text, using the lowercase column name
-        arabic_text = str(row.get('arabic script', ''))
+        arabic_text = str(row.get('arabicscript', ''))
         if not arabic_text or arabic_text == 'nan':
             continue
             
         word_id = hashlib.md5(arabic_text.encode()).hexdigest()
         
-        # Check for different spellings of pronunciation just in case
-        letter_pronunc = str(row.get('letter-wise pronounciation', row.get('letter-wise pronunciation', '')))
+        # Checking both spellings just in case
+        letter_pronunc = str(row.get('letterwisepronounciation', row.get('letterwisepronunciation', '')))
         
         # Check if word exists in DB
         c.execute("SELECT id FROM vocab WHERE id=?", (word_id,))
@@ -55,10 +54,10 @@ def sync_data(conn, df):
                        str(row.get('chapter', '')), 
                        arabic_text, 
                        str(row.get('pronunciation', '')), 
-                       str(row.get('english meaning', '')), 
-                       str(row.get('explanation', '')), # Added back just in case!
+                       str(row.get('englishmeaning', '')), 
+                       str(row.get('explanation', '')),
                        letter_pronunc, 
-                       str(row.get('letter-wise english', '')), 
+                       str(row.get('letterwiseenglish', '')), 
                        0))
     conn.commit()
 
@@ -94,8 +93,8 @@ st.title("🇰🇼 Learn Kuwaiti Arabic")
 conn = init_db()
 try:
     df = fetch_sheet_data(SHEET_URL)
-    # Apply the same bulletproof lowercase fix here for the failsafe
-    df.columns = df.columns.str.strip().str.lower()
+    # Apply the same Regex fix for the failsafe checker
+    df.columns = df.columns.str.replace(r'[^a-zA-Z0-9]', '', regex=True).str.lower()
     
     if 'chapter' not in df.columns:
         st.error("🚨 Critical Error: Could not find the 'Chapter' column in your Google Sheet.")
@@ -148,19 +147,19 @@ if chapters:
             # The English Meaning & Collapsible Breakdown (Only shows if toggled ON)
             if st.session_state.show_meaning:
                 # Show standard meaning
-                if english and english != 'nan':
+                if english and english != 'nan' and english != '':
                     st.success(f"**Meaning:** {english}")
                     
                 # Show explanation if you ever use that column
-                if expl and expl != 'nan':
+                if expl and expl != 'nan' and expl != '':
                     st.info(f"**Explanation:** {expl}")
                 
                 # Show Letter-wise breakdown in a neat, clickable expander
-                if (l_pronunc and l_pronunc != 'nan') or (l_eng and l_eng != 'nan'):
+                if (l_pronunc and l_pronunc != 'nan' and l_pronunc != '') or (l_eng and l_eng != 'nan' and l_eng != ''):
                     with st.expander("🔍 Letter-wise Breakdown"):
-                        if l_pronunc and l_pronunc != 'nan':
+                        if l_pronunc and l_pronunc != 'nan' and l_pronunc != '':
                             st.write(f"**Pronunciation:** {l_pronunc}")
-                        if l_eng and l_eng != 'nan':
+                        if l_eng and l_eng != 'nan' and l_eng != '':
                             st.write(f"**English:** {l_eng}")
 
         st.write("How well did you know this?")
