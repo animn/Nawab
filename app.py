@@ -43,13 +43,15 @@ st.markdown(
 
 # --- HELPER FUNCTIONS ---
 def clean_val(val):
-    if pd.isna(val) or str(val).strip().lower() == 'nan': return ""
+    if pd.isna(val) or str(val).strip().lower() == 'nan':
+        return ""
     return str(val).strip()
 
 @st.cache_data(show_spinner=False)
 def get_audio_bytes(text):
     text = clean_val(text)
-    if not text: return None
+    if not text:
+        return None
     try:
         tts = gTTS(text=text, lang='ar')
         fp = io.BytesIO()
@@ -78,7 +80,8 @@ def sync_data(conn, df):
     df.columns = df.columns.str.replace(r'[^a-zA-Z0-9]', '', regex=True).str.lower()
     for _, row in df.iterrows():
         arabic_text = clean_val(row.get('arabicscript', ''))
-        if not arabic_text: continue
+        if not arabic_text:
+            continue
 
         word_id = hashlib.md5(arabic_text.encode()).hexdigest()
         l_pron = clean_val(row.get('letterwisepronounciation', row.get('letterwisepronunciation', '')))
@@ -90,7 +93,7 @@ def sync_data(conn, df):
                         chapter=excluded.chapter, arabic=excluded.arabic, pronunciation=excluded.pronunciation,
                         english=excluded.english, explanation=excluded.explanation,
                         letter_pronunc=excluded.letter_pronunc, letter_eng=excluded.letter_eng''',
-                  (word_id, clean_val(row.get('chapter')), arabic_text, clean_val(row.get('pronunciation')), 
+                  (word_id, clean_val(row.get('chapter')), arabic_text, clean_val(row.get('pronunciation')),
                    clean_val(row.get('englishmeaning')), clean_val(row.get('explanation')), l_pron,
                    clean_val(row.get('letterwiseenglish')), 0, ""))
     conn.commit()
@@ -98,7 +101,8 @@ def sync_data(conn, df):
 def update_score(conn, word_id, is_correct):
     c = conn.cursor()
     row = c.execute("SELECT score FROM vocab WHERE id=?", (word_id,)).fetchone()
-    if not row: return 0
+    if not row:
+        return 0
     new_score = (row[0] or 0) + 1 if is_correct else 0
     c.execute("UPDATE vocab SET score=? WHERE id=?", (new_score, word_id))
     conn.commit()
@@ -119,8 +123,7 @@ def get_stats(conn):
 # --- BULLETPROOF DYNAMIC REST API MODULE ---
 def call_gemini_dynamic(prompt, api_key):
     """Fetches exactly what models Google allows your key to use, then picks the best one."""
-    
-    # 1. Ask Google for your authorized models
+
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     list_resp = requests.get(list_url)
     if list_resp.status_code != 200:
@@ -128,31 +131,27 @@ def call_gemini_dynamic(prompt, api_key):
 
     models_data = list_resp.json().get('models', [])
     valid_model_name = None
-    
-    # 2. Scan the list for a Gemini model that supports text generation
+
     for m in models_data:
         name = m.get('name', '')
         methods = m.get('supportedGenerationMethods', [])
-        
+
         if 'gemini' in name.lower() and 'generateContent' in methods:
-            valid_model_name = name # Fallback to any valid model
+            valid_model_name = name
             if 'flash' in name.lower():
-                valid_model_name = name # Prioritize flash if it exists
+                valid_model_name = name
                 break
-                
+
     if not valid_model_name:
-        # If this triggers, your Google Cloud project has Generative AI completely disabled
         raise Exception("Your API key has 0 authorized text models. Check Google AI Studio permissions.")
 
-    # 3. Call the guaranteed-to-work model
-    # Note: 'valid_model_name' already includes the 'models/' prefix (e.g., 'models/gemini-1.5-flash')
     generate_url = f"https://generativelanguage.googleapis.com/v1beta/{valid_model_name}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    
+
     resp = requests.post(generate_url, headers=headers, json=payload)
     data = resp.json()
-    
+
     if resp.status_code == 200:
         return data['candidates'][0]['content']['parts'][0]['text']
     else:
@@ -163,81 +162,102 @@ def render_flashcard(conn, word_data, tab_key):
     word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
 
     # Header
-    st.markdown(f"<div style='font-size:18px; font-weight:bold; margin-bottom:10px;'>{chapter} <span style='font-weight:normal; color:#aaa; font-size:14px;'>(Score: {score}/3)</span></div>", unsafe_allow_html=True)
-    
+    st.markdown(
+        f"<div style='font-size:18px; font-weight:bold; margin-bottom:10px;'>{chapter} "
+        f"<span style='font-weight:normal; color:#aaa; font-size:14px;'>(Score: {score}/3)</span></div>",
+        unsafe_allow_html=True
+    )
+
     btn_col1, btn_col2 = st.columns(2)
-    
+
     if btn_col1.button("👍 Got it", key=f"up_{word_id}_{tab_key}", use_container_width=True):
         new_score = update_score(conn, word_id, True)
         st.session_state.flash_toast = f"👍 Score increased to {new_score}/3" if new_score < 3 else "👑 Word Mastered!"
-        if tab_key == "home": st.session_state.current_word = None
+        if tab_key == "home":
+            st.session_state.current_word = None
         st.rerun()
-        
+
     if btn_col2.button("👎 Practice", key=f"down_{word_id}_{tab_key}", use_container_width=True):
         update_score(conn, word_id, False)
         st.session_state.flash_toast = "👎 Score reset to 0."
-        if tab_key == "home": st.session_state.current_word = None
+        if tab_key == "home":
+            st.session_state.current_word = None
         st.rerun()
 
     # Flashcard Body
     with st.container(border=True):
         st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
         audio_bytes = get_audio_bytes(arabic)
-        if audio_bytes: st.audio(audio_bytes, format="audio/mp3")
-        
+        if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3")
+
         display_title = f"{pronunc if pronunc else 'Pronunciation'} | {english if english else 'Meaning'}"
         with st.expander(f"🗣️ {display_title}"):
-            if expl: st.info(f"**Explanation:** {expl}")
-            if l_pronunc: st.write(f"**Sound:** {l_pronunc}")
-            if l_eng: st.write(f"**Letters:** {l_eng}")
+            if expl:
+                st.info(f"**Explanation:** {expl}")
+            if l_pronunc:
+                st.write(f"**Sound:** {l_pronunc}")
+            if l_eng:
+                st.write(f"**Letters:** {l_eng}")
 
     # S.AI Tutor Segment
     note_key = f"note_{word_id}_{tab_key}"
-    edit_key = f"edit_note_{word_id}_{tab_key}"
-    if note_key not in st.session_state: st.session_state[note_key] = saved_note if saved_note else ""
-    if edit_key not in st.session_state: st.session_state[edit_key] = False
+
+    if note_key not in st.session_state:
+        st.session_state[note_key] = saved_note if saved_note else ""
 
     st.markdown("<br>", unsafe_allow_html=True)
-    question = st.text_input("Ask S.AI a question", key=f"q_{word_id}_{tab_key}", placeholder="E.g., Use this word in a sentence...")
-    
-    sa_col1, sa_col2 = st.columns(2)
-    
-    if sa_col1.button("🤖 Ask S.AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
-        if not GEMINI_API_KEY: 
+
+    question = st.text_input(
+        "Ask S.AI a question",
+        key=f"q_{word_id}_{tab_key}",
+        placeholder="Type 1 for exactly 2 examples..."
+    )
+
+    if st.button("🤖 S.AI", key=f"ask_{word_id}_{tab_key}", use_container_width=True):
+        if not GEMINI_API_KEY:
             st.error("Add API key in Streamlit Secrets!")
         elif question:
             with st.spinner("Thinking..."):
                 try:
-                    prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
-                    
-                    # Triggers the dynamic model finder
-                    ai_answer = call_gemini_dynamic(prompt, GEMINI_API_KEY)
-                    
-                    st.session_state[note_key] += f"\nQ: {question}\nS.AI: {ai_answer.strip()}\n\n"
+                    if question.strip() == "1":
+                        prompt = f"""
+Arabic word: {arabic}
+Meaning: {english}
+
+Give exactly 2 short Kuwaiti Arabic examples using this word.
+Format strictly like this with no blank line between examples:
+1. Arabic sentence - English meaning
+2. Arabic sentence - English meaning
+
+Do not add any explanation.
+"""
+                    else:
+                        prompt = f"Arabic: {arabic}. Meaning: {english}. Question: {question}. Answer short in Kuwaiti context."
+
+                    ai_answer = call_gemini_dynamic(prompt, GEMINI_API_KEY).strip()
+
+                    st.session_state[note_key] += f"Q: {question}\nS.AI: {ai_answer}\n"
                     save_note(conn, word_id, st.session_state[note_key])
                     st.toast("AI response added!")
                     st.rerun()
-                except Exception as ex: 
+
+                except Exception as ex:
                     st.error(f"S.AI Error: {ex}")
 
-    if sa_col2.button("💾 Save Notes", key=f"quick_save_{word_id}_{tab_key}", use_container_width=True):
-        save_note(conn, word_id, st.session_state[note_key])
-        st.toast("Notes saved!")
+    # Editable autosave notes
+    new_note_text = st.text_area(
+        "Notes",
+        value=st.session_state[note_key],
+        key=f"text_{word_id}_{tab_key}",
+        height=150,
+        placeholder="Notes will appear here. You can edit directly..."
+    )
 
-    # Notes Display
-    display_text = st.session_state[note_key].strip() or "No notes yet..."
-    st.markdown(f"<div class='note-preview'>{display_text}</div>", unsafe_allow_html=True)
-    
-    if st.button("✏️ Edit Notes", key=f"edit_btn_{word_id}_{tab_key}", use_container_width=True):
-        st.session_state[edit_key] = not st.session_state[edit_key]
-
-    if st.session_state[edit_key]:
-        st.session_state[note_key] = st.text_area("Edit", value=st.session_state[note_key], key=f"text_{word_id}_{tab_key}", label_visibility="collapsed", height=120)
-        if st.button("Save Edits", key=f"save_{word_id}_{tab_key}", use_container_width=True):
-            save_note(conn, word_id, st.session_state[note_key])
-            st.session_state[edit_key] = False
-            st.toast("Saved")
-            st.rerun()
+    if new_note_text != st.session_state[note_key]:
+        st.session_state[note_key] = new_note_text
+        save_note(conn, word_id, new_note_text)
+        st.toast("Notes autosaved")
 
 # --- MAIN APP SETUP ---
 if "flash_toast" in st.session_state:
@@ -247,50 +267,76 @@ if "flash_toast" in st.session_state:
 st.markdown("## 🇰🇼 Yalla Kuwaiti!")
 
 conn = init_db()
+
 try:
     df = fetch_sheet_data(SHEET_URL)
     sync_data(conn, df)
-except Exception as e: st.error("Spreadsheet error.")
+except Exception as e:
+    st.error("Spreadsheet error.")
 
 st.sidebar.header("Filters")
-chapters = [row[0] for row in conn.cursor().execute("SELECT DISTINCT chapter FROM vocab WHERE chapter != '' ORDER BY chapter").fetchall()]
+chapters = [
+    row[0]
+    for row in conn.cursor().execute(
+        "SELECT DISTINCT chapter FROM vocab WHERE chapter != '' ORDER BY chapter"
+    ).fetchall()
+]
 selected_chapter = st.sidebar.selectbox("Chapter", ["All"] + chapters)
 
 total, mastered, learning, practice = get_stats(conn)
+
 st.sidebar.divider()
 st.sidebar.markdown("🏆 **Dashboard**")
 st.sidebar.metric("👑 Mastered (Score 3+)", mastered)
 st.sidebar.metric("📈 Learning (Score 1-2)", learning)
 st.sidebar.metric("🔴 Needs Practice (Score 0)", practice)
-st.sidebar.progress(mastered / total if total > 0 else 0, text=f"Fluency: {int((mastered/total)*100) if total else 0}%")
+st.sidebar.progress(
+    mastered / total if total > 0 else 0,
+    text=f"Fluency: {int((mastered / total) * 100) if total else 0}%"
+)
 
 tab1, tab2, tab3, tab4 = st.tabs(["🎮 Daily", "🏋️ Review", "👑 Mastered", "⚙️ Sync"])
 
 base_q = "SELECT * FROM vocab"
 params = []
+
 if selected_chapter != "All":
     base_q += " WHERE chapter = ?"
     params.append(selected_chapter)
 
 with tab1:
-    words = conn.cursor().execute(base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3"), params).fetchall()
+    words = conn.cursor().execute(
+        base_q + (" AND score < 3" if "WHERE" in base_q else " WHERE score < 3"),
+        params
+    ).fetchall()
+
     if words:
         current = st.session_state.get("current_word")
         valid_ids = {w[0] for w in words}
+
         if current is None or current[0] not in valid_ids:
             st.session_state.current_word = random.choice(words)
+
         render_flashcard(conn, st.session_state.current_word, "home")
     else:
         st.success("🎉 Section fully mastered!")
 
 with tab2:
-    rows = conn.cursor().execute(base_q + (" AND score < 3 ORDER BY score ASC" if "WHERE" in base_q else " WHERE score < 3 ORDER BY score ASC"), params).fetchall()
+    rows = conn.cursor().execute(
+        base_q + (" AND score < 3 ORDER BY score ASC" if "WHERE" in base_q else " WHERE score < 3 ORDER BY score ASC"),
+        params
+    ).fetchall()
+
     for w in rows[:20]:
         with st.expander(f"🔴 {w[2]} ({w[4]}) - Score: {w[8]}/3"):
             render_flashcard(conn, w, f"prac_{w[0]}")
 
 with tab3:
-    rows = conn.cursor().execute(base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3"), params).fetchall()
+    rows = conn.cursor().execute(
+        base_q + (" AND score >= 3" if "WHERE" in base_q else " WHERE score >= 3"),
+        params
+    ).fetchall()
+
     for w in rows[:20]:
         with st.expander(f"👑 {w[2]} ({w[4]})"):
             render_flashcard(conn, w, f"mast_{w[0]}")
