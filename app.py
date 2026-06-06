@@ -8,6 +8,7 @@ import hashlib
 import requests
 import json
 import re
+import html
 
 # --- Configuration & Keys ---
 st.set_page_config(page_title="Yalla Kuwaiti!", page_icon="🇰🇼", layout="centered")
@@ -33,10 +34,20 @@ def get_secret_value(name, default=None):
 SHEET_APPEND_WEBHOOK_URL = get_secret_value("SHEET_APPEND_WEBHOOK_URL")
 SHEET_APPEND_SECRET = get_secret_value("SHEET_APPEND_SECRET", "")
 
+# Azure Kuwait Arabic Text-to-Speech via lightweight REST API.
+# Add these in Streamlit Secrets after creating an Azure Speech resource:
+# AZURE_SPEECH_KEY = "your-azure-speech-key"
+# AZURE_SPEECH_REGION = "eastus"  # or your Azure Speech resource region
+# AZURE_SPEECH_VOICE = "ar-KW-FahedNeural"  # optional; male Kuwait voice
+AZURE_SPEECH_KEY = get_secret_value("AZURE_SPEECH_KEY", "")
+AZURE_SPEECH_REGION = get_secret_value("AZURE_SPEECH_REGION", "")
+AZURE_SPEECH_VOICE = get_secret_value("AZURE_SPEECH_VOICE", "ar-KW-FahedNeural")
+
 INBOX_JSON_KEYS = [
     "chapter",
     "arabicscript",
     "pronunciation",
+    "ttstext",
     "englishmeaning",
     "explanation",
     "letterwisepronounciation",
@@ -135,6 +146,7 @@ def clean_val(val):
 
 @st.cache_data(show_spinner=False)
 def get_audio_bytes(text):
+    """Fallback generic Arabic audio using gTTS. Used only when no saved Azure MP3 exists."""
     text = clean_val(text)
     if not text:
         return None
@@ -145,6 +157,59 @@ def get_audio_bytes(text):
         return fp.getvalue()
     except Exception:
         return None
+
+
+def azure_tts_is_configured():
+    return bool(clean_val(AZURE_SPEECH_KEY) and clean_val(AZURE_SPEECH_REGION))
+
+
+def get_azure_tts_audio_bytes(text, voice=None):
+    """Generate Kuwait Arabic MP3 via Azure Speech REST API.
+
+    This deliberately avoids the heavy Azure SDK so Streamlit Cloud stays lightweight.
+    """
+    text = clean_val(text)
+    if not text:
+        raise ValueError("TTS text is empty.")
+    if not azure_tts_is_configured():
+        raise ValueError("Azure Speech is not configured. Add AZURE_SPEECH_KEY and AZURE_SPEECH_REGION in Streamlit Secrets.")
+
+    region = clean_val(AZURE_SPEECH_REGION)
+    selected_voice = clean_val(voice) or clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
+    endpoint = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+
+    escaped_text = html.escape(text, quote=False)
+    ssml = f"""
+<speak version='1.0' xml:lang='ar-KW'>
+  <voice xml:lang='ar-KW' name='{selected_voice}'>{escaped_text}</voice>
+</speak>
+""".strip()
+
+    headers = {
+        "Ocp-Apim-Subscription-Key": clean_val(AZURE_SPEECH_KEY),
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3",
+        "User-Agent": "YallaKuwaitiStreamlit",
+    }
+
+    resp = requests.post(endpoint, headers=headers, data=ssml.encode("utf-8"), timeout=45)
+    if resp.status_code != 200:
+        raise Exception(f"Azure TTS failed. HTTP {resp.status_code}: {resp.text[:300]}")
+    return resp.content
+
+
+def generate_approved_word_audio(tts_text, arabic_text):
+    """Generate Azure audio once during Inbox approval. Returns (audio_bytes, provider, message)."""
+    source_text = clean_val(tts_text) or clean_val(arabic_text)
+    if not source_text:
+        return None, "", "No TTS text available."
+    if not azure_tts_is_configured():
+        return None, "", "Azure TTS not configured; flashcards will use generic gTTS fallback."
+    try:
+        audio = get_azure_tts_audio_bytes(source_text)
+        return audio, clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural", "Azure Kuwait audio generated."
+    except Exception as exc:
+        return None, "", f"Azure TTS failed; generic gTTS fallback will be used. Details: {exc}"
 
 
 def extract_json_object(text):
@@ -178,6 +243,7 @@ def normalize_inbox_payload(payload, fallback_text=""):
         "chapter": ["chapter", "category", "lesson", "customlessoncategory"],
         "arabicscript": ["arabicscript", "arabic", "arabictext", "arabicword"],
         "pronunciation": ["pronunciation", "pronounciation", "phonetic", "transliteration"],
+        "ttstext": ["ttstext", "tts", "audiotext", "texttospeech", "speechtext"],
         "englishmeaning": ["englishmeaning", "meaning", "english", "translation"],
         "explanation": ["explanation", "explain", "usage"],
         "letterwisepronounciation": [
@@ -207,6 +273,13 @@ def normalize_inbox_payload(payload, fallback_text=""):
 
 
 # --- DATABASE MODULE ---
+def ensure_column(conn, table_name, column_name, column_type):
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    if column_name not in existing:
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+        conn.commit()
+
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -223,11 +296,19 @@ def init_db():
             letter_pronunc TEXT,
             letter_eng TEXT,
             score INTEGER DEFAULT 0,
-            notes TEXT DEFAULT ''
+            notes TEXT DEFAULT '',
+            ttstext TEXT DEFAULT '',
+            audio_mp3 BLOB,
+            audio_provider TEXT DEFAULT ''
         )
         """
     )
     conn.commit()
+
+    # Migrate older local databases without losing score/notes.
+    ensure_column(conn, "vocab", "ttstext", "TEXT DEFAULT ''")
+    ensure_column(conn, "vocab", "audio_mp3", "BLOB")
+    ensure_column(conn, "vocab", "audio_provider", "TEXT DEFAULT ''")
     return conn
 
 
@@ -252,12 +333,13 @@ def sync_data(conn, df):
                 row.get("letterwisepronunciation", "")
             )
         )
+        tts_text = clean_val(row.get("ttstext", row.get("tts", "")))
 
         c.execute(
             """
             INSERT INTO vocab
-            (id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes, ttstext, audio_mp3, audio_provider)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 chapter = excluded.chapter,
                 arabic = excluded.arabic,
@@ -265,7 +347,11 @@ def sync_data(conn, df):
                 english = excluded.english,
                 explanation = excluded.explanation,
                 letter_pronunc = excluded.letter_pronunc,
-                letter_eng = excluded.letter_eng
+                letter_eng = excluded.letter_eng,
+                ttstext = CASE
+                    WHEN excluded.ttstext IS NOT NULL AND excluded.ttstext != '' THEN excluded.ttstext
+                    ELSE vocab.ttstext
+                END
             """,
             (
                 word_id,
@@ -278,13 +364,16 @@ def sync_data(conn, df):
                 clean_val(row.get("letterwiseenglish")),
                 0,
                 "",
+                tts_text,
+                None,
+                "",
             ),
         )
 
     conn.commit()
 
 
-def upsert_vocab_entry(conn, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng):
+def upsert_vocab_entry(conn, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, ttstext="", audio_mp3=None, audio_provider=""):
     arabic = clean_val(arabic)
     if not arabic:
         raise ValueError("Arabic Script cannot be empty.")
@@ -293,8 +382,8 @@ def upsert_vocab_entry(conn, chapter, arabic, pronunciation, english, explanatio
     conn.cursor().execute(
         """
         INSERT INTO vocab
-        (id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '')
+        (id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes, ttstext, audio_mp3, audio_provider)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             chapter = excluded.chapter,
             arabic = excluded.arabic,
@@ -302,7 +391,13 @@ def upsert_vocab_entry(conn, chapter, arabic, pronunciation, english, explanatio
             english = excluded.english,
             explanation = excluded.explanation,
             letter_pronunc = excluded.letter_pronunc,
-            letter_eng = excluded.letter_eng
+            letter_eng = excluded.letter_eng,
+            ttstext = excluded.ttstext,
+            audio_mp3 = COALESCE(excluded.audio_mp3, vocab.audio_mp3),
+            audio_provider = CASE
+                WHEN excluded.audio_mp3 IS NOT NULL THEN excluded.audio_provider
+                ELSE vocab.audio_provider
+            END
         """,
         (
             word_id,
@@ -313,13 +408,16 @@ def upsert_vocab_entry(conn, chapter, arabic, pronunciation, english, explanatio
             clean_val(explanation),
             clean_val(letter_pronunc),
             clean_val(letter_eng),
+            clean_val(ttstext) or arabic,
+            audio_mp3,
+            clean_val(audio_provider),
         ),
     )
     conn.commit()
     return word_id
 
 
-def append_vocab_entry_to_google_sheet(chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng):
+def append_vocab_entry_to_google_sheet(chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, ttstext=""):
     """Send approved inbox entries back to Google Sheets through Apps Script.
 
     Returns:
@@ -327,15 +425,16 @@ def append_vocab_entry_to_google_sheet(chapter, arabic, pronunciation, english, 
     """
     if not SHEET_APPEND_WEBHOOK_URL:
         return False, "Google Sheet write-back is not configured. Add SHEET_APPEND_WEBHOOK_URL in Streamlit Secrets."
-
     if not SHEET_APPEND_SECRET:
         return False, "Google Sheet write-back secret is missing. Add SHEET_APPEND_SECRET in Streamlit Secrets."
+
     payload = {
         "secret": SHEET_APPEND_SECRET,
         "entry": {
             "chapter": clean_val(chapter) or "Custom Lesson",
             "arabicscript": clean_val(arabic),
             "pronunciation": clean_val(pronunciation),
+            "ttstext": clean_val(ttstext) or clean_val(arabic),
             "englishmeaning": clean_val(english),
             "explanation": clean_val(explanation),
             "letterwisepronounciation": clean_val(letter_pronunc),
@@ -483,6 +582,7 @@ Use exactly these keys:
   "chapter": "lesson category such as Daily Phrases, Home, Office, Shopping, Greetings, Food & Drinks, Family, Travel, Questions, Time, Numbers",
   "arabicscript": "natural Kuwaiti Arabic phrase in Arabic script",
   "pronunciation": "simple English transliteration for a beginner",
+  "ttstext": "Arabic-only text optimized for text-to-speech pronunciation",
   "englishmeaning": "concise English meaning",
   "explanation": "short practical usage explanation",
   "letterwisepronounciation": "sound-by-sound or phrase-part breakdown",
@@ -502,6 +602,7 @@ Rules:
 - Keep the Arabic phrase short, practical, and usable in real conversation.
 - "arabicscript" must contain only the final Arabic/Kuwaiti phrase in Arabic script.
 - "pronunciation" must be simple for an English speaker to read.
+- "ttstext" must be Arabic script only, written to help a Kuwait Arabic TTS voice pronounce it naturally. Use simple vowel marks, spacing, or wording adjustments if useful. Do not use English letters in "ttstext".
 - "englishmeaning" must be concise.
 - "explanation" must be practical and short, and must state whether the phrase is Kuwaiti spoken, Gulf-common, or formal Arabic.
 - "letterwisepronounciation" must explain the sound breakdown in simple English.
@@ -529,16 +630,24 @@ Rules:
                 "Arabic Script",
                 value=clean_val(pending.get("arabicscript", raw_input))
             )
-            edit_pron = st.text_input("Pronunciation", value=pending.get("pronunciation", ""))
-            edit_mean = st.text_input("English Meaning", value=pending.get("englishmeaning", ""))
-            edit_expl = st.text_area("Explanation", value=pending.get("explanation", ""))
-            edit_l_pron = st.text_input("Letter-wise Pronunciation", value=pending.get("letterwisepronounciation", ""))
-            edit_l_eng = st.text_input("Letter-wise English", value=pending.get("letterwiseenglish", ""))
+            edit_pron = st.text_input("Pronunciation", value=clean_val(pending.get("pronunciation", "")))
+            edit_tts = st.text_input(
+                "TTS Text for Audio",
+                value=clean_val(pending.get("ttstext", pending.get("arabicscript", raw_input)))
+            )
+            st.caption("TTS Text is Arabic-only audio text. Azure Kuwait voice will read this, while Arabic Script remains the clean display text.")
+            edit_mean = st.text_input("English Meaning", value=clean_val(pending.get("englishmeaning", "")))
+            edit_expl = st.text_area("Explanation", value=clean_val(pending.get("explanation", "")))
+            edit_l_pron = st.text_input("Letter-wise Pronunciation", value=clean_val(pending.get("letterwisepronounciation", "")))
+            edit_l_eng = st.text_input("Letter-wise English", value=clean_val(pending.get("letterwiseenglish", "")))
 
             submit_col, cancel_col = st.columns(2)
 
             if submit_col.form_submit_button("✅ Approve & Save", use_container_width=True):
                 try:
+                    with st.spinner("Generating Kuwait Arabic audio once..."):
+                        audio_mp3, audio_provider, audio_msg = generate_approved_word_audio(edit_tts, edit_ar)
+
                     upsert_vocab_entry(
                         conn,
                         edit_cat,
@@ -548,6 +657,9 @@ Rules:
                         edit_expl,
                         edit_l_pron,
                         edit_l_eng,
+                        edit_tts,
+                        audio_mp3,
+                        audio_provider,
                     )
 
                     sheet_ok, sheet_msg = append_vocab_entry_to_google_sheet(
@@ -558,16 +670,18 @@ Rules:
                         edit_expl,
                         edit_l_pron,
                         edit_l_eng,
+                        edit_tts,
                     )
 
+                    audio_status = audio_msg if 'audio_msg' in locals() else ""
                     if sheet_ok:
                         fetch_sheet_data.clear()
                         st.session_state.flash_toast = (
-                            f"Saved locally + Google Sheet under: {clean_val(edit_cat) or 'Custom Lesson'}"
+                            f"Saved locally + Google Sheet under: {clean_val(edit_cat) or 'Custom Lesson'}. {audio_status}"
                         )
                     else:
                         st.session_state.flash_toast = (
-                            f"Saved locally, but Google Sheet was not updated: {sheet_msg}"
+                            f"Saved locally, but Google Sheet was not updated: {sheet_msg}. {audio_status}"
                         )
 
                     del st.session_state.inbox_pending
@@ -584,7 +698,9 @@ Rules:
 
 # --- UI COMPONENT: FLASHCARD ---
 def render_flashcard(conn, word_data, tab_key):
-    word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note = word_data
+    # Supports both old 10-column rows and new 13-column rows.
+    padded = list(word_data) + ["", None, ""]
+    word_id, chapter, arabic, pronunc, english, expl, l_pronunc, l_eng, score, saved_note, tts_text, saved_audio, audio_provider = padded[:13]
 
     display_label = chapter if chapter else "Custom Lesson"
     st.markdown(
@@ -620,9 +736,19 @@ def render_flashcard(conn, word_data, tab_key):
     with st.container(border=True):
         st.markdown(f"<h1 class='arabic-word' dir='rtl'>{arabic}</h1>", unsafe_allow_html=True)
 
-        audio_bytes = get_audio_bytes(arabic)
+        audio_bytes = saved_audio
+        if isinstance(audio_bytes, memoryview):
+            audio_bytes = audio_bytes.tobytes()
+
         if audio_bytes:
             st.audio(audio_bytes, format="audio/mp3")
+            if audio_provider:
+                st.caption(f"Audio: Azure Kuwait voice ({audio_provider})")
+        else:
+            fallback_audio = get_audio_bytes(clean_val(tts_text) or arabic)
+            if fallback_audio:
+                st.audio(fallback_audio, format="audio/mp3")
+                st.caption("Audio: generic Arabic fallback. New approved words can use Azure Kuwait voice after Azure secrets are configured.")
 
         display_title = f"{pronunc if pronunc else 'Pronunciation'} | {english if english else 'Meaning'}"
         with st.expander(f"🗣️ {display_title}"):
@@ -757,7 +883,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ["📥 Inbox", "🎮 Daily", "🏋️ Review", "👑 Mastered", "⚙️ Sync"]
 )
 
-base_q = "SELECT id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes FROM vocab"
+base_q = "SELECT id, chapter, arabic, pronunciation, english, explanation, letter_pronunc, letter_eng, score, notes, ttstext, audio_mp3, audio_provider FROM vocab"
 params = []
 if selected_chapter != "All":
     base_q += " WHERE chapter = ?"
@@ -804,12 +930,18 @@ with tab4:
 with tab5:
     st.subheader("⚙️ Sync Management")
 
-if SHEET_APPEND_WEBHOOK_URL and SHEET_APPEND_SECRET:
+    if SHEET_APPEND_WEBHOOK_URL and SHEET_APPEND_SECRET:
         st.success("Google Sheet write-back is configured.")
-elif SHEET_APPEND_WEBHOOK_URL and not SHEET_APPEND_SECRET:
-    st.warning("Google Sheet webhook URL is configured, but SHEET_APPEND_SECRET is missing. Google Sheet write-back will fail.")
-else:
-    st.warning("Google Sheet write-back is not configured yet. Approved Inbox words will save only inside the app database.")
+    elif SHEET_APPEND_WEBHOOK_URL and not SHEET_APPEND_SECRET:
+        st.warning("Google Sheet webhook URL is configured, but SHEET_APPEND_SECRET is missing. Google Sheet write-back will fail.")
+    else:
+        st.warning("Google Sheet write-back is not configured yet. Approved Inbox words will save only inside the app database.")
+
+    if azure_tts_is_configured():
+        st.success(f"Azure Kuwait TTS is configured: {clean_val(AZURE_SPEECH_VOICE) or 'ar-KW-FahedNeural'}")
+    else:
+        st.info("Azure Kuwait TTS is not configured yet. Audio will use generic Arabic gTTS fallback.")
+
     if st.button("Refresh Reference Datasets", use_container_width=True):
         fetch_sheet_data.clear()
         st.session_state.current_word = None
