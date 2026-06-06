@@ -81,9 +81,56 @@ st.markdown(
 
 # --- HELPER FUNCTIONS ---
 def clean_val(val):
-    if pd.isna(val) or str(val).strip().lower() == "nan":
+    """
+    Robust cleaner for strings, numbers, pandas values, lists, arrays, dicts.
+    Prevents: 'truth value of an array is ambiguous'
+    """
+    if val is None:
         return ""
-    return str(val).strip()
+
+    # If Gemini returns a list/array, flatten it into readable text
+    if isinstance(val, (list, tuple, set)):
+        parts = []
+        for item in val:
+            item_text = clean_val(item)
+            if item_text:
+                parts.append(item_text)
+        return " | ".join(parts)
+
+    # If Gemini returns a dict/object, flatten key-value pairs
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            k_text = clean_val(k)
+            v_text = clean_val(v)
+            if k_text and v_text:
+                parts.append(f"{k_text}: {v_text}")
+            elif v_text:
+                parts.append(v_text)
+        return " | ".join(parts)
+
+    # If pandas gives a Series due to duplicate columns, flatten it
+    if isinstance(val, pd.Series):
+        parts = []
+        for item in val.tolist():
+            item_text = clean_val(item)
+            if item_text:
+                parts.append(item_text)
+        return " | ".join(parts)
+
+    # Safe pandas NaN check
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+
+    text = str(val).strip()
+
+    if text.lower() in ["nan", "none", "null"]:
+        return ""
+
+    return text
 
 
 @st.cache_data(show_spinner=False)
@@ -441,10 +488,25 @@ Use exactly these keys:
 }}
 
 Rules:
-- If the input is English, translate it into the most natural Kuwaiti Arabic expression.
-- Prefer spoken Kuwaiti/Gulf dialect over formal Arabic.
-- If formal Arabic is more suitable, use it and mention that in the explanation.
-- Keep the explanation practical and short.
+- The output must be natural Kuwaiti spoken Arabic, not Modern Standard Arabic.
+- If the input is English, translate the intended meaning into the most natural Kuwaiti Arabic expression, not word-for-word Arabic.
+- If the English input is grammatically imperfect, infer the natural meaning before translating.
+- Prefer phrases a Kuwaiti person would actually say in daily conversation.
+- Prefer Kuwaiti/Gulf spoken dialect over formal Arabic.
+- Avoid textbook/formal Arabic unless there is no natural spoken equivalent.
+- If the output is Gulf-common rather than specifically Kuwaiti, clearly mention that in the explanation.
+- If formal Arabic is used, clearly mention in the explanation that it is more formal and why it was used.
+- Use Kuwaiti/Gulf spoken expressions where suitable, such as شلون، شنو، وين، ماكو، أبي، عندي، في، خوش.
+- Keep the Arabic phrase short, practical, and usable in real conversation.
+- "arabicscript" must contain only the final Arabic/Kuwaiti phrase in Arabic script.
+- "pronunciation" must be simple for an English speaker to read.
+- "englishmeaning" must be concise.
+- "explanation" must be practical and short, and must state whether the phrase is Kuwaiti spoken, Gulf-common, or formal Arabic.
+- "letterwisepronounciation" must explain the sound breakdown in simple English.
+- "letterwiseenglish" must explain the phrase components or word-by-word meaning in simple English.
+- "chapter" should be a useful lesson category such as Daily Phrases, Home, Office, Food & Drinks, Shopping, Family, Travel, Emotions, Questions, Time, Numbers, Greetings, Building/Neighbours, Work, or Travel.
+- Every JSON value must be a plain string only.
+- Do not return arrays, lists, nested objects, markdown, bullet points, or comments.
 - Do not add comments before or after the JSON.
 """
                     response = call_gemini_dynamic(prompt, GEMINI_API_KEY)
