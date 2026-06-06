@@ -328,6 +328,8 @@ def append_vocab_entry_to_google_sheet(chapter, arabic, pronunciation, english, 
     if not SHEET_APPEND_WEBHOOK_URL:
         return False, "Google Sheet write-back is not configured. Add SHEET_APPEND_WEBHOOK_URL in Streamlit Secrets."
 
+    if not SHEET_APPEND_SECRET:
+        return False, "Google Sheet write-back secret is missing. Add SHEET_APPEND_SECRET in Streamlit Secrets."
     payload = {
         "secret": SHEET_APPEND_SECRET,
         "entry": {
