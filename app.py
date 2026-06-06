@@ -523,7 +523,10 @@ Rules:
 
         with st.form("inbox_review_form"):
             edit_cat = st.text_input("Custom Lesson Category", value=pending.get("chapter", "Custom Lesson"))
-            edit_ar = st.text_input("Arabic Script", value=pending.get("arabicscript", raw_input), dir="rtl")
+            edit_ar = st.text_input(
+                "Arabic Script",
+                value=clean_val(pending.get("arabicscript", raw_input))
+            )
             edit_pron = st.text_input("Pronunciation", value=pending.get("pronunciation", ""))
             edit_mean = st.text_input("English Meaning", value=pending.get("englishmeaning", ""))
             edit_expl = st.text_area("Explanation", value=pending.get("explanation", ""))
