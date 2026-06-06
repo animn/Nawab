@@ -802,11 +802,12 @@ with tab4:
 with tab5:
     st.subheader("⚙️ Sync Management")
 
-    if SHEET_APPEND_WEBHOOK_URL:
+if SHEET_APPEND_WEBHOOK_URL and SHEET_APPEND_SECRET:
         st.success("Google Sheet write-back is configured.")
-    else:
-        st.warning("Google Sheet write-back is not configured yet. Approved Inbox words will save only inside the app database.")
-
+elif SHEET_APPEND_WEBHOOK_URL and not SHEET_APPEND_SECRET:
+    st.warning("Google Sheet webhook URL is configured, but SHEET_APPEND_SECRET is missing. Google Sheet write-back will fail.")
+else:
+    st.warning("Google Sheet write-back is not configured yet. Approved Inbox words will save only inside the app database.")
     if st.button("Refresh Reference Datasets", use_container_width=True):
         fetch_sheet_data.clear()
         st.session_state.current_word = None
