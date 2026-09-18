@@ -164,15 +164,15 @@ def azure_tts_is_configured():
 
 
 def get_azure_tts_audio_bytes(text, voice=None):
-    """Generate Kuwait Arabic MP3 via Azure Speech REST API.
-
-    This deliberately avoids the heavy Azure SDK so Streamlit Cloud stays lightweight.
-    """
+    """Generate Kuwait Arabic MP3 via Azure Speech REST API."""
     text = clean_val(text)
     if not text:
         raise ValueError("TTS text is empty.")
     if not azure_tts_is_configured():
-        raise ValueError("Azure Speech is not configured. Add AZURE_SPEECH_KEY and AZURE_SPEECH_REGION in Streamlit Secrets.")
+        raise ValueError(
+            "Azure Speech is not configured. Add AZURE_SPEECH_KEY and "
+            "AZURE_SPEECH_REGION in Streamlit Secrets."
+        )
 
     region = clean_val(AZURE_SPEECH_REGION)
     selected_voice = clean_val(voice) or clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
@@ -188,13 +188,22 @@ def get_azure_tts_audio_bytes(text, voice=None):
     headers = {
         "Ocp-Apim-Subscription-Key": clean_val(AZURE_SPEECH_KEY),
         "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": "audio-16khz-32kbitrate-mono-mp3",
+        "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
         "User-Agent": "YallaKuwaitiStreamlit",
     }
 
     resp = requests.post(endpoint, headers=headers, data=ssml.encode("utf-8"), timeout=45)
     if resp.status_code != 200:
-        raise Exception(f"Azure TTS failed. HTTP {resp.status_code}: {resp.text[:300]}")
+        details = clean_val(resp.text) or clean_val(resp.reason) or "No error body returned by Azure."
+        raise Exception(
+            f"Azure TTS failed (region={region}, voice={selected_voice}). "
+            f"HTTP {resp.status_code}: {details[:400]}"
+        )
+    if not resp.content:
+        raise Exception(
+            f"Azure TTS returned HTTP 200 but no audio bytes "
+            f"(region={region}, voice={selected_voice})."
+        )
     return resp.content
 
 
@@ -207,9 +216,29 @@ def generate_approved_word_audio(tts_text, arabic_text):
         return None, "", "Azure TTS not configured; flashcards will use generic gTTS fallback."
     try:
         audio = get_azure_tts_audio_bytes(source_text)
-        return audio, clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural", "Azure Kuwait audio generated."
+        provider = clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
+        return audio, provider, f"Azure Kuwait audio generated with {provider}."
     except Exception as exc:
         return None, "", f"Azure TTS failed; generic gTTS fallback will be used. Details: {exc}"
+
+
+def inbox_audio_signature(tts_text, arabic_text):
+    """Signature used to safely reuse an Inbox Azure preview when the exact TTS text is approved."""
+    source_text = clean_val(tts_text) or clean_val(arabic_text)
+    voice = clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
+    region = clean_val(AZURE_SPEECH_REGION)
+    raw = f"{source_text}|{voice}|{region}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def clear_inbox_audio_preview():
+    for key in (
+        "inbox_preview_audio",
+        "inbox_preview_provider",
+        "inbox_preview_signature",
+        "inbox_preview_error",
+    ):
+        st.session_state.pop(key, None)
 
 
 def extract_json_object(text):
@@ -615,6 +644,7 @@ Rules:
                     response = call_gemini_dynamic(prompt, GEMINI_API_KEY)
                     payload = normalize_inbox_payload(extract_json_object(response), raw_clean)
                     st.session_state.inbox_pending = payload
+                    clear_inbox_audio_preview()
                     st.toast("AI parsing successful. Review before saving.")
                 except Exception as e:
                     st.error(f"Processing Failure: {e}")
@@ -628,72 +658,148 @@ Rules:
             edit_cat = st.text_input("Custom Lesson Category", value=pending.get("chapter", "Custom Lesson"))
             edit_ar = st.text_input(
                 "Arabic Script",
-                value=clean_val(pending.get("arabicscript", raw_input))
+                value=clean_val(pending.get("arabicscript", raw_input)),
             )
             edit_pron = st.text_input("Pronunciation", value=clean_val(pending.get("pronunciation", "")))
             edit_tts = st.text_input(
                 "TTS Text for Audio",
-                value=clean_val(pending.get("ttstext", pending.get("arabicscript", raw_input)))
+                value=clean_val(pending.get("ttstext", pending.get("arabicscript", raw_input))),
             )
-            st.caption("TTS Text is Arabic-only audio text. Azure Kuwait voice will read this, while Arabic Script remains the clean display text.")
+            st.caption(
+                "TTS Text is Arabic-only audio text. Preview it before saving. "
+                "New approved words use Azure Kuwait voice when Azure succeeds."
+            )
             edit_mean = st.text_input("English Meaning", value=clean_val(pending.get("englishmeaning", "")))
             edit_expl = st.text_area("Explanation", value=clean_val(pending.get("explanation", "")))
-            edit_l_pron = st.text_input("Letter-wise Pronunciation", value=clean_val(pending.get("letterwisepronounciation", "")))
-            edit_l_eng = st.text_input("Letter-wise English", value=clean_val(pending.get("letterwiseenglish", "")))
+            edit_l_pron = st.text_input(
+                "Letter-wise Pronunciation",
+                value=clean_val(pending.get("letterwisepronounciation", "")),
+            )
+            edit_l_eng = st.text_input(
+                "Letter-wise English",
+                value=clean_val(pending.get("letterwiseenglish", "")),
+            )
 
-            submit_col, cancel_col = st.columns(2)
+            preview_col, submit_col, cancel_col = st.columns(3)
+            preview_clicked = preview_col.form_submit_button("🔊 Preview Audio", use_container_width=True)
+            submit_clicked = submit_col.form_submit_button("✅ Approve & Save", use_container_width=True)
+            cancel_clicked = cancel_col.form_submit_button("🗑️ Discard", use_container_width=True)
 
-            if submit_col.form_submit_button("✅ Approve & Save", use_container_width=True):
+        current_signature = inbox_audio_signature(edit_tts, edit_ar)
+
+        if preview_clicked:
+            source_text = clean_val(edit_tts) or clean_val(edit_ar)
+            clear_inbox_audio_preview()
+
+            if not source_text:
+                st.error("TTS Text and Arabic Script are both empty.")
+            elif azure_tts_is_configured():
                 try:
+                    with st.spinner("Generating Azure Kuwait audio preview..."):
+                        preview_audio = get_azure_tts_audio_bytes(source_text)
+                    st.session_state.inbox_preview_audio = preview_audio
+                    st.session_state.inbox_preview_provider = clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
+                    st.session_state.inbox_preview_signature = current_signature
+                    st.session_state.inbox_preview_error = ""
+                except Exception as exc:
+                    # Show the actual Azure error instead of silently hiding it behind gTTS.
+                    st.session_state.inbox_preview_error = str(exc)
+                    fallback_audio = get_audio_bytes(source_text)
+                    if fallback_audio:
+                        st.session_state.inbox_preview_audio = fallback_audio
+                        st.session_state.inbox_preview_provider = "gTTS fallback"
+                        st.session_state.inbox_preview_signature = current_signature
+            else:
+                fallback_audio = get_audio_bytes(source_text)
+                if fallback_audio:
+                    st.session_state.inbox_preview_audio = fallback_audio
+                    st.session_state.inbox_preview_provider = "gTTS fallback"
+                    st.session_state.inbox_preview_signature = current_signature
+                st.session_state.inbox_preview_error = (
+                    "Azure TTS is not configured. Preview is using generic Arabic gTTS."
+                )
+
+        preview_audio = st.session_state.get("inbox_preview_audio")
+        preview_provider = clean_val(st.session_state.get("inbox_preview_provider", ""))
+        preview_error = clean_val(st.session_state.get("inbox_preview_error", ""))
+        preview_signature = clean_val(st.session_state.get("inbox_preview_signature", ""))
+
+        if preview_audio and preview_signature == current_signature:
+            st.markdown("**🔊 Audio Preview**")
+            st.audio(preview_audio, format="audio/mp3")
+            if preview_provider == "gTTS fallback":
+                st.warning("Preview provider: generic Arabic gTTS fallback.")
+            else:
+                st.success(f"Preview provider: Azure Kuwait voice ({preview_provider}).")
+
+        if preview_error and preview_signature == current_signature:
+            st.error(f"Azure preview issue: {preview_error}")
+
+        if submit_clicked:
+            try:
+                # If the user already previewed this exact TTS text successfully with Azure,
+                # reuse those bytes instead of charging/calling Azure a second time.
+                if (
+                    preview_audio
+                    and preview_signature == current_signature
+                    and preview_provider
+                    and preview_provider != "gTTS fallback"
+                ):
+                    audio_mp3 = preview_audio
+                    audio_provider = preview_provider
+                    audio_msg = f"Azure Kuwait preview reused and saved ({audio_provider})."
+                else:
                     with st.spinner("Generating Kuwait Arabic audio once..."):
                         audio_mp3, audio_provider, audio_msg = generate_approved_word_audio(edit_tts, edit_ar)
 
-                    upsert_vocab_entry(
-                        conn,
-                        edit_cat,
-                        edit_ar,
-                        edit_pron,
-                        edit_mean,
-                        edit_expl,
-                        edit_l_pron,
-                        edit_l_eng,
-                        edit_tts,
-                        audio_mp3,
-                        audio_provider,
+                upsert_vocab_entry(
+                    conn,
+                    edit_cat,
+                    edit_ar,
+                    edit_pron,
+                    edit_mean,
+                    edit_expl,
+                    edit_l_pron,
+                    edit_l_eng,
+                    edit_tts,
+                    audio_mp3,
+                    audio_provider,
+                )
+
+                sheet_ok, sheet_msg = append_vocab_entry_to_google_sheet(
+                    edit_cat,
+                    edit_ar,
+                    edit_pron,
+                    edit_mean,
+                    edit_expl,
+                    edit_l_pron,
+                    edit_l_eng,
+                    edit_tts,
+                )
+
+                if sheet_ok:
+                    fetch_sheet_data.clear()
+                    st.session_state.flash_toast = (
+                        f"Saved locally + Google Sheet under: "
+                        f"{clean_val(edit_cat) or 'Custom Lesson'}. {audio_msg}"
+                    )
+                else:
+                    st.session_state.flash_toast = (
+                        f"Saved locally, but Google Sheet was not updated: {sheet_msg}. {audio_msg}"
                     )
 
-                    sheet_ok, sheet_msg = append_vocab_entry_to_google_sheet(
-                        edit_cat,
-                        edit_ar,
-                        edit_pron,
-                        edit_mean,
-                        edit_expl,
-                        edit_l_pron,
-                        edit_l_eng,
-                        edit_tts,
-                    )
-
-                    audio_status = audio_msg if 'audio_msg' in locals() else ""
-                    if sheet_ok:
-                        fetch_sheet_data.clear()
-                        st.session_state.flash_toast = (
-                            f"Saved locally + Google Sheet under: {clean_val(edit_cat) or 'Custom Lesson'}. {audio_status}"
-                        )
-                    else:
-                        st.session_state.flash_toast = (
-                            f"Saved locally, but Google Sheet was not updated: {sheet_msg}. {audio_status}"
-                        )
-
-                    del st.session_state.inbox_pending
-                    st.session_state.current_word = None
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
-
-            if cancel_col.form_submit_button("🗑️ Discard", use_container_width=True):
                 del st.session_state.inbox_pending
-                st.toast("Draft removed.")
+                clear_inbox_audio_preview()
+                st.session_state.current_word = None
                 st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        if cancel_clicked:
+            del st.session_state.inbox_pending
+            clear_inbox_audio_preview()
+            st.toast("Draft removed.")
+            st.rerun()
 
 
 # --- UI COMPONENT: FLASHCARD ---
@@ -938,7 +1044,18 @@ with tab5:
         st.warning("Google Sheet write-back is not configured yet. Approved Inbox words will save only inside the app database.")
 
     if azure_tts_is_configured():
-        st.success(f"Azure Kuwait TTS is configured: {clean_val(AZURE_SPEECH_VOICE) or 'ar-KW-FahedNeural'}")
+        configured_voice = clean_val(AZURE_SPEECH_VOICE) or "ar-KW-FahedNeural"
+        st.success(f"Azure Speech secrets are present. Configured voice: {configured_voice}")
+        st.caption("Use the test below to confirm the key, region, endpoint, and Kuwait voice actually work.")
+
+        if st.button("🔊 Test Azure Kuwait Voice", use_container_width=True):
+            try:
+                with st.spinner("Calling Azure Speech directly..."):
+                    test_audio = get_azure_tts_audio_bytes("شلونك؟")
+                st.audio(test_audio, format="audio/mp3")
+                st.success(f"Azure TTS test succeeded with {configured_voice}.")
+            except Exception as exc:
+                st.error(f"Azure TTS test failed: {exc}")
     else:
         st.info("Azure Kuwait TTS is not configured yet. Audio will use generic Arabic gTTS fallback.")
 
