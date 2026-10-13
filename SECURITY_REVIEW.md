@@ -29,11 +29,11 @@ test of the deployed service.
   nonempty secret; that does not prove the receiver checks it. Verify the receiver
   rejects missing/wrong secrets **before** writing, stores its secret server-side,
   treats vocabulary fields as plain text, and only writes to the intended sheet.
-- No live app URL, runtime process/config, Codespaces visibility, cloud viewer
-  allowlist, reverse proxy config or access logs were available. GitHub connector
-  deployment/workflow collection reads were unsupported. Repository access is not
-  hosting-account access. Therefore public/unauthorized network reachability
-  remains **unverified**.
+- At the initial review, no live URL or hosting access was available. The
+  October 13 follow-up below verifies that the supplied live UI can be reached
+  from the review browser without an app-password prompt. Hosting-account
+  permissions, effective runtime flags, direct origin/port exposure, access logs
+  and receiver-side authentication remain unverified.
 - CORS/XSRF are not login controls. A private Codespace/cloud app may already have
   restricted access, while a publicly exposed instance of the old code would not
   have an app-level barrier against using services or changing shared progress.
@@ -81,6 +81,35 @@ started local Streamlit server returned HTTP 200 for health, accepted a same-ori
 WebSocket and rejected an untrusted-origin WebSocket with HTTP 403. The CI workflow
 runs the regression suite on Python 3.11. These are not live deployment/proxy tests
 or real-provider compatibility guarantees.
+
+## Live follow-up — 13 October 2026
+
+The owner supplied https://chalechalo.streamlit.app/ after the initial review.
+At approximately 06:08 UTC, the app was opened in the reviewer's cloud browser.
+It initially showed Streamlit's inactivity/sleep screen; the normal wake button
+was used and the app loaded successfully.
+
+- No sign-in was performed during this visit and no app-password prompt appeared.
+  The learning dashboard, all five tabs and the Inbox's Process Word control were
+  visible. This verifies UI reachability from this browser; it does not establish
+  every hosting access rule or independently prove a cookie-free private session.
+- The dashboard showed 311 Needs Practice, 0 Learning and 0 Mastered. Those values
+  alone are not evidence of lost progress.
+- No vocabulary was submitted, no score/note was saved, no sync was triggered,
+  and no paid provider or Sheets write-back action was tested. The test does not
+  prove unauthorized mutations or credential exposure, and is not a breach finding.
+- PR #1 remained draft, open and unmerged at head
+  `8a656db3cf0dee309f9951a5be8ce6ac3d8eca55`. Its Security regressions workflow
+  completed successfully, including the pytest step:
+  https://github.com/animn/Nawab/actions/runs/37901627004/job/113725282262 .
+- The reviewable code patch is complete. Production rollout is still pending:
+  the owner must securely configure APP_PASSWORD before authorizing merge/deploy.
+  Do not paste it into chat or GitHub. GitHub repository access does not grant
+  Streamlit hosting administration or authorize credential changes.
+- Post-deployment verification of the password gate, authenticated learning flows,
+  effective CORS/XSRF settings and Sheets receiver authentication remains required.
+  Preserve/backup learning data before any hosting restart or deployment; the
+  existing shared local SQLite database is not a durable cloud backup.
 
 ## References
 
