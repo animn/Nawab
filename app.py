@@ -245,8 +245,14 @@ def clean_val(val):
 # gTTS FALLBACK
 # =========================================================
 
-@st.cache_data(show_spinner=False)
 def get_audio_bytes(text):
+    # Check even on cache hits and after password rotation.
+    require_authorized()
+    return _cached_audio_bytes(text)
+
+
+@st.cache_data(show_spinner=False, max_entries=512)
+def _cached_audio_bytes(text):
 
     """
     Generic Arabic gTTS fallback.
@@ -799,11 +805,21 @@ def init_db():
     return conn
 
 
+def fetch_sheet_data(url):
+    require_authorized()
+    return _cached_sheet_data(url)
+
+
+def clear_sheet_cache():
+    require_authorized()
+    _cached_sheet_data.clear()
+
+
 @st.cache_data(
     ttl=600,
     show_spinner=False
 )
-def fetch_sheet_data(url):
+def _cached_sheet_data(url):
 
     return pd.read_csv(url)
 
@@ -1162,9 +1178,17 @@ def append_vocab_entry_to_google_sheet(
             "in Streamlit Secrets."
         )
 
-    endpoint = urlsplit(SHEET_APPEND_WEBHOOK_URL)
-    if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username:
-        return False, "Google Sheet write-back requires a trusted HTTPS endpoint."
+    try:
+        endpoint = urlsplit(SHEET_APPEND_WEBHOOK_URL)
+        valid_endpoint = (
+            endpoint.scheme == "https" and bool(endpoint.hostname)
+            and endpoint.username is None and endpoint.password is None
+            and endpoint.port in (None, 443)
+        )
+    except (TypeError, ValueError):
+        valid_endpoint = False
+    if not valid_endpoint:
+        return False, "Google Sheet write-back requires a trusted HTTPS endpoint on port 443."
 
     payload = {
 
@@ -1204,6 +1228,12 @@ def append_vocab_entry_to_google_sheet(
                 ),
         },
     }
+
+    # Apps Script setValues/appendRow can interpret leading '=' as a formula.
+    # Reject rather than silently changing vocabulary. The receiver must enforce
+    # literal-text storage too, because callers can bypass this client.
+    if any(value.lstrip().startswith("=") for value in payload["entry"].values()):
+        return False, "Google Sheet fields must be plain text, not formulas."
 
     try:
 
@@ -2223,7 +2253,7 @@ Rules:
 
                 if sheet_ok:
 
-                    fetch_sheet_data.clear()
+                    clear_sheet_cache()
 
                     st.session_state[
                         "flash_toast"
@@ -3207,7 +3237,7 @@ with tab5:
         use_container_width=True
     ):
 
-        fetch_sheet_data.clear()
+        clear_sheet_cache()
 
         st.session_state[
             "current_word"

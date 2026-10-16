@@ -17,6 +17,8 @@ PASSWORD = 'test-only-high-entropy-password-12345'
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
+    import streamlit as st
+    st.cache_data.clear()
     monkeypatch.chdir(tmp_path)
     # Any unexpected provider access fails the test, even in broad app handlers.
     network = Mock(side_effect=AssertionError('Unexpected network call'))
@@ -110,6 +112,8 @@ def functions():
 
 @pytest.mark.parametrize('name,args', [
     ('init_db', ()), ('sync_data', (None, None)),
+    ('get_audio_bytes', ('hello',)), ('fetch_sheet_data', ('https://example.test',)),
+    ('clear_sheet_cache', ()),
     ('upsert_vocab_entry', (None, '', '', '', '', '', '', '')),
     ('update_score', (None, '', True)), ('save_note', (None, '', '')),
     ('autosave_note_from_state', ('', '', '')),
@@ -235,3 +239,97 @@ def test_apps_script_response_redirect_uses_get_without_secret(monkeypatch):
     assert ns['append_vocab_entry_to_google_sheet'](*(['word'] * 7))[0]
     assert get.call_args.kwargs == {'timeout':30, 'allow_redirects':False}
     assert 'fake-secret' not in str(get.call_args)
+
+
+@pytest.mark.parametrize('name,cache_name', [
+    ('get_audio_bytes', '_cached_audio_bytes'),
+    ('fetch_sheet_data', '_cached_sheet_data'),
+])
+def test_cached_services_recheck_access_before_cached_result(name, cache_name):
+    ns = functions()
+    cached = Mock(return_value='cached-result')
+    ns[cache_name] = cached
+    assert ns[name]('word') == 'cached-result'
+    class Denied(BaseException):
+        pass
+    ns['require_authorized'].side_effect = Denied
+    with pytest.raises(Denied):
+        ns[name]('word')
+    cached.assert_called_once_with('word')
+
+
+@pytest.mark.parametrize('field', range(8))
+def test_sheet_formula_fields_rejected_before_request(monkeypatch, field):
+    ns = functions()
+    ns.update(SHEET_APPEND_WEBHOOK_URL='https://script.google.com/macros/s/test/exec',
+              SHEET_APPEND_SECRET='fake-secret')
+    post = Mock()
+    monkeypatch.setattr(requests, 'post', post)
+    values = ['word'] * 8
+    values[field] = ' \t=IMPORTDATA("https://example.test")'
+    ok, message = ns['append_vocab_entry_to_google_sheet'](*values)
+    assert not ok
+    assert 'plain text' in message
+    post.assert_not_called()
+
+
+def test_azure_ssml_escaping_and_no_redirect(monkeypatch):
+    import xml.etree.ElementTree as ET
+    ns = functions()
+    ns.update(AZURE_SPEECH_KEY='fake-secret', AZURE_SPEECH_REGION='eastus',
+              AZURE_SPEECH_VOICE="voice' /><audio src='https://example.test")
+    post = Mock(return_value=Mock(status_code=200, content=b'audio'))
+    monkeypatch.setattr(requests, 'post', post)
+    assert ns['get_azure_tts_audio_bytes']('<hello>&') == b'audio'
+    call = post.call_args
+    assert call.kwargs['allow_redirects'] is False
+    root = ET.fromstring(call.kwargs['data'])
+    assert len(list(root.iter())) == 2
+    assert root[0].text == '<hello>&'
+    assert root[0].attrib['name'] == ns['AZURE_SPEECH_VOICE']
+
+
+@pytest.mark.parametrize('region', ['eastus.evil.test/', 'eastus@evil.test', 'https://evil.test'])
+def test_azure_invalid_region_never_sends(monkeypatch, region):
+    ns = functions()
+    ns.update(AZURE_SPEECH_KEY='fake-secret', AZURE_SPEECH_REGION=region,
+              AZURE_SPEECH_VOICE='ar-KW-FahedNeural')
+    post = Mock()
+    monkeypatch.setattr(requests, 'post', post)
+    with pytest.raises(ValueError, match='region'):
+        ns['get_azure_tts_audio_bytes']('hello')
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize('url', [
+    'https://[broken', 'https://example.test:invalid/exec',
+    'https://user:password@example.test/exec', 'https://example.test:8443/exec',
+])
+def test_malformed_sheet_endpoint_fails_closed(monkeypatch, url):
+    ns = functions()
+    ns.update(SHEET_APPEND_WEBHOOK_URL=url, SHEET_APPEND_SECRET='fake-secret')
+    post = Mock()
+    monkeypatch.setattr(requests, 'post', post)
+    assert not ns['append_vocab_entry_to_google_sheet'](*(['word'] * 7))[0]
+    post.assert_not_called()
+
+
+def test_populated_flashcard_escapes_html_and_refresh_still_works(isolated, monkeypatch):
+    import gtts
+    _, network, sheet = isolated
+    sheet.return_value = pd.DataFrame([{
+        'Chapter': '<img src=x onerror=alert(1)>',
+        'ArabicScript': '<script>alert(1)</script>',
+        'EnglishMeaning': 'test word',
+    }])
+    monkeypatch.setattr(gtts, 'gTTS', Mock())
+    at = sign_in(app().run())
+    assert not at.exception
+    rendered = '\n'.join(m.value for m in at.markdown)
+    assert '&lt;img src=x onerror=alert(1)&gt;' in rendered
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in rendered
+    assert '<script>alert(1)</script>' not in rendered
+    next(b for b in at.button if b.label == 'Refresh Reference Datasets').click().run()
+    assert not at.exception
+    assert len(at.tabs) == 5
+    network.assert_not_called()

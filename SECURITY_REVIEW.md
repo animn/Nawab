@@ -117,3 +117,71 @@ was used and the app loaded successfully.
 - https://docs.streamlit.io/knowledge-base/deploy/remote-start
 - https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/share-your-app
 - https://ai.google.dev/api
+
+## Merge-readiness follow-up — 17 October 2026 (Kuwait)
+
+Reviewed PR head: `cc39a0e708956a33eb046a0555cafc274abb967b`.
+GitHub reported open, draft, unmerged and mergeable, with no completed reviews.
+Contrary to the uncertainty from the empty combined-status response, the Actions
+API confirms a successful Security regressions run for this exact head, including
+its pytest step: https://github.com/animn/Nawab/actions/runs/38355093658 .
+That result predates the corrections below; require green CI on the new head too.
+
+### Corrections from this review
+
+- Add authorization wrappers outside the Sheets-read and gTTS caches, including
+  cache clearing, so cache hits cannot skip the service-entry authorization check.
+  This closes a defense-in-depth gap; the existing top-level login gate already
+  protects normal UI entry. Limit cached fallback audio to 512 entries.
+- Reject vocabulary fields beginning with `=` (including after whitespace) before
+  Sheets write-back. Apps Script spreadsheet writes can interpret these as formulas.
+  This is client-side defense, not proof the absent receiver is safe. It must also
+  authenticate every write and store fields as literal text. Other spreadsheet/CSV
+  consumers can have additional formula conventions; exports need their own review.
+- Fail closed with a generic response for malformed webhook URLs, embedded URL
+  credentials and nonstandard HTTPS ports. The configured host remains an owner
+  trust decision; HTTPS is not a host allowlist. Google Apps Script uses port 443.
+- Add regressions for these paths, Azure region validation/SSML escaping/no redirects,
+  and a populated flashcard with HTML-like input plus the reference-refresh UI.
+  Clear shared Streamlit caches between app tests to prevent empty-fixture reuse.
+- Expand CI to Python 3.11 and 3.12. Local validation: **49 passed**, Python 3.12.14,
+  Streamlit 1.66.0, pandas 3.0.6. No live provider calls or real Sheets writes.
+
+### Decision and evidence needed
+
+**Keep this PR draft; do not merge or deploy until hosting conditions are verified.**
+The URL is recorded as https://chalechalo.streamlit.app/ in the October 13 notes;
+this follow-up did not revisit it or establish current runtime controls. An HTTPS
+URL in documentation is not a live TLS or access-control verification.
+
+| Requirement | GitHub evidence | Remaining confirmation |
+| --- | --- | --- |
+| APP_PASSWORD | Code rejects missing/short values before initialization | Host administrator confirms a unique random 20+ character value in Streamlit Secrets; never disclose it |
+| Hosting identity and branch | Historical live URL in review notes | Confirm current URL, hosting account and deployed branch; ensure pushing this PR branch cannot auto-deploy production |
+| Private access and HTTPS | README requires private viewers/authenticated proxy | Confirm viewer controls, HTTPS and WebSocket protection, with no direct-origin bypass |
+| Codespaces | Loopback binding and notification-only forwarding | If used, inspect actual port 8501 visibility and keep it Private; otherwise record not applicable |
+| Runtime CORS/XSRF | Both enabled in TOML and development launch flags | Inspect effective settings and environment/CLI overrides on host |
+| Sheets receiver | Client sends a secret and rejects unsafe redirects/formulas | Inspect receiver code; verify missing/wrong secret rejected before any write, literal-text storage and target-sheet restriction |
+| Service credentials | No real secrets added by this review | Confirm least privilege, quotas/budget alerts and assess prior URL-key logging for rotation |
+| Learning data | Shared local SQLite, unchanged schema | Back up progress, notes and saved audio before restart; verify restore plan |
+
+After host configuration is confirmed and new-head CI passes, the code is a
+reasonable hardening change for a private single-owner app. A controlled deployment
+must then verify signed-out denial, authenticated learning/notes/audio/AI, actual
+CORS/WebSocket behavior and an approved disposable Sheets write. These acceptance
+tests cannot be claimed complete before deployment. Keep the app private during
+verification; stop it if verification fails rather than rolling back to anonymous
+access or disabled request protections.
+
+Remaining limits: no per-user identity/isolation, login rate limiter or API budget
+enforcement in the application; Streamlit media URLs are not protected by this
+script gate. Hosting access controls must cover the entire service. The public
+CSV source is not made private by this PR. Dependencies remain broadly versioned,
+so future installs may differ; this review is not a full dependency/CVE audit or
+proof of compatibility with every supported Streamlit version. Re-run CI for the
+chosen deployment runtime and retain its resolved dependency versions. No breach
+or public unauthorized mutation was demonstrated.
+
+References for these corrections:
+- https://docs.streamlit.io/develop/api-reference/caching-and-state/st.cache_data
+- https://developers.google.com/apps-script/reference/spreadsheet/range#setvaluesvalues
