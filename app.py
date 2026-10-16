@@ -9,6 +9,9 @@ import requests
 import json
 import re
 import html
+from urllib.parse import urlsplit
+
+from access_control import require_access, require_authorized
 
 # --- Configuration & Keys ---
 st.set_page_config(
@@ -17,9 +20,11 @@ st.set_page_config(
     layout="centered"
 )
 
+require_access()
+
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except KeyError:
+except (KeyError, FileNotFoundError):
     GEMINI_API_KEY = None
 
 SHEET_URL = (
@@ -240,8 +245,14 @@ def clean_val(val):
 # gTTS FALLBACK
 # =========================================================
 
-@st.cache_data(show_spinner=False)
 def get_audio_bytes(text):
+    # Check even on cache hits and after password rotation.
+    require_authorized()
+    return _cached_audio_bytes(text)
+
+
+@st.cache_data(show_spinner=False, max_entries=512)
+def _cached_audio_bytes(text):
 
     """
     Generic Arabic gTTS fallback.
@@ -299,6 +310,8 @@ def get_azure_tts_audio_bytes(
 
     Uses REST instead of Azure SDK to keep Streamlit deployment light.
     """
+    require_authorized()
+
 
     text = clean_val(text)
 
@@ -331,6 +344,10 @@ def get_azure_tts_audio_bytes(
         f"tts.speech.microsoft.com/"
         f"cognitiveservices/v1"
     )
+
+    if not re.fullmatch(r"[a-z0-9-]+", region):
+        raise ValueError("Invalid Azure Speech region.")
+    selected_voice = html.escape(selected_voice, quote=True)
 
     escaped_text = html.escape(
         text,
@@ -366,24 +383,13 @@ def get_azure_tts_audio_bytes(
         endpoint,
         headers=headers,
         data=ssml.encode("utf-8"),
+        allow_redirects=False,
         timeout=45,
     )
 
     if resp.status_code != 200:
 
-        details = (
-            clean_val(resp.text)
-            or clean_val(resp.reason)
-            or "No error body returned by Azure."
-        )
-
-        raise Exception(
-            f"Azure TTS failed "
-            f"(region={region}, "
-            f"voice={selected_voice}). "
-            f"HTTP {resp.status_code}: "
-            f"{details[:400]}"
-        )
+        raise RuntimeError(f"Azure TTS failed (HTTP {resp.status_code}).")
 
     if not resp.content:
 
@@ -460,7 +466,7 @@ def generate_approved_word_audio(
             "",
             "Azure TTS failed; generic gTTS "
             "fallback will be used. "
-            f"Details: {exc}"
+            "Please check the service configuration."
         )
 
 
@@ -743,6 +749,8 @@ def ensure_column(
 
 def init_db():
 
+    require_authorized()
+
     conn = sqlite3.connect(
         DB_NAME
     )
@@ -797,11 +805,21 @@ def init_db():
     return conn
 
 
+def fetch_sheet_data(url):
+    require_authorized()
+    return _cached_sheet_data(url)
+
+
+def clear_sheet_cache():
+    require_authorized()
+    _cached_sheet_data.clear()
+
+
 @st.cache_data(
     ttl=600,
     show_spinner=False
 )
-def fetch_sheet_data(url):
+def _cached_sheet_data(url):
 
     return pd.read_csv(url)
 
@@ -810,6 +828,8 @@ def sync_data(
     conn,
     df
 ):
+
+    require_authorized()
 
     c = conn.cursor()
 
@@ -990,6 +1010,8 @@ def upsert_vocab_entry(
     audio_provider=""
 ):
 
+    require_authorized()
+
     arabic = clean_val(
         arabic
     )
@@ -1136,6 +1158,8 @@ def append_vocab_entry_to_google_sheet(
     ttstext=""
 ):
 
+    require_authorized()
+
     if not SHEET_APPEND_WEBHOOK_URL:
 
         return (
@@ -1153,6 +1177,18 @@ def append_vocab_entry_to_google_sheet(
             "Add SHEET_APPEND_SECRET "
             "in Streamlit Secrets."
         )
+
+    try:
+        endpoint = urlsplit(SHEET_APPEND_WEBHOOK_URL)
+        valid_endpoint = (
+            endpoint.scheme == "https" and bool(endpoint.hostname)
+            and endpoint.username is None and endpoint.password is None
+            and endpoint.port in (None, 443)
+        )
+    except (TypeError, ValueError):
+        valid_endpoint = False
+    if not valid_endpoint:
+        return False, "Google Sheet write-back requires a trusted HTTPS endpoint on port 443."
 
     payload = {
 
@@ -1193,19 +1229,40 @@ def append_vocab_entry_to_google_sheet(
         },
     }
 
+    # Apps Script setValues/appendRow can interpret leading '=' as a formula.
+    # Reject rather than silently changing vocabulary. The receiver must enforce
+    # literal-text storage too, because callers can bypass this client.
+    if any(value.lstrip().startswith("=") for value in payload["entry"].values()):
+        return False, "Google Sheet fields must be plain text, not formulas."
+
     try:
 
         resp = requests.post(
             SHEET_APPEND_WEBHOOK_URL,
             json=payload,
+            allow_redirects=False,
             timeout=30
         )
+
+        # Apps Script ContentService uses a 302/303 to fetch the response.
+        # Follow only its HTTPS content host, using GET without the secret/body.
+        if resp.status_code in (302, 303):
+            location = resp.headers.get("Location", "")
+            target = urlsplit(location)
+            if (
+                target.scheme != "https"
+                or target.hostname != "script.googleusercontent.com"
+                or target.username
+                or target.port not in (None, 443)
+            ):
+                return False, "Google Sheet returned an unexpected redirect."
+            resp = requests.get(location, timeout=30, allow_redirects=False)
 
     except Exception as exc:
 
         return (
             False,
-            f"Google Sheet write failed: {exc}"
+            "Google Sheet write failed. Check the service configuration."
         )
 
     if resp.status_code != 200:
@@ -1213,8 +1270,7 @@ def append_vocab_entry_to_google_sheet(
         return (
             False,
             "Google Sheet write failed. "
-            f"HTTP {resp.status_code}: "
-            f"{resp.text[:300]}"
+            f"HTTP {resp.status_code}."
         )
 
     try:
@@ -1226,28 +1282,12 @@ def append_vocab_entry_to_google_sheet(
         return (
             False,
             "Google Sheet returned a "
-            "non-JSON response: "
-            f"{resp.text[:300]}"
+            "non-JSON response."
         )
 
-    if data.get("ok") is True:
-
-        return (
-            True,
-            clean_val(
-                data.get("message")
-            )
-            or "Saved to Google Sheet."
-        )
-
-    return (
-        False,
-        clean_val(
-            data.get("error")
-        )
-        or
-        f"Google Sheet write failed: {data}"
-    )
+    if isinstance(data, dict) and data.get("ok") is True:
+        return True, "Saved to Google Sheet."
+    return False, "Google Sheet write was not accepted. Check the webhook configuration."
 
 
 # =========================================================
@@ -1259,6 +1299,8 @@ def update_score(
     word_id,
     is_correct
 ):
+
+    require_authorized()
 
     c = conn.cursor()
 
@@ -1299,6 +1341,8 @@ def save_note(
     note_text
 ):
 
+    require_authorized()
+
     conn.cursor().execute(
         "UPDATE vocab "
         "SET notes = ? "
@@ -1317,6 +1361,8 @@ def autosave_note_from_state(
     text_key,
     note_key
 ):
+
+    require_authorized()
 
     note_text = (
         st.session_state.get(
@@ -1389,21 +1435,24 @@ def call_gemini_dynamic(
     force_json=False,
 ):
 
+    require_authorized()
+
     list_url = (
         "https://generativelanguage.googleapis.com/"
-        f"v1beta/models?key={api_key}"
+        "v1beta/models"
     )
 
     list_resp = requests.get(
         list_url,
+        headers={"x-goog-api-key": api_key},
+        allow_redirects=False,
         timeout=30
     )
 
     if list_resp.status_code != 200:
 
         raise Exception(
-            "Google rejected key entirely: "
-            f"{list_resp.text}"
+            f"Gemini model lookup failed (HTTP {list_resp.status_code})."
         )
 
     models_data = (
@@ -1453,12 +1502,13 @@ def call_gemini_dynamic(
     generate_url = (
         "https://generativelanguage.googleapis.com/"
         f"v1beta/{valid_model_name}:"
-        f"generateContent?key={api_key}"
+        "generateContent"
     )
 
     headers = {
         "Content-Type":
-            "application/json"
+            "application/json",
+        "x-goog-api-key": api_key
     }
 
     payload = {
@@ -1514,6 +1564,7 @@ def call_gemini_dynamic(
         generate_url,
         headers=headers,
         json=payload,
+        allow_redirects=False,
         timeout=60
     )
 
@@ -1525,8 +1576,7 @@ def call_gemini_dynamic(
 
         raise Exception(
             "Gemini returned non-JSON "
-            "API response: "
-            f"{resp.text[:500]}"
+            "API response."
         )
 
     if resp.status_code == 200:
@@ -1549,18 +1599,11 @@ def call_gemini_dynamic(
 
             raise Exception(
                 "Gemini response structure "
-                f"unexpected: {data}"
+                "unexpected."
             )
 
-    raise Exception(
-        data.get(
-            "error",
-            {}
-        ).get(
-            "message",
-            str(data)
-        )
-    )
+    raise RuntimeError(f"Gemini request failed (HTTP {resp.status_code}).")
+
 
 
 def clean_two_example_response(
@@ -1758,7 +1801,7 @@ Rules:
                 except Exception as e:
 
                     st.error(
-                        f"Processing Failure: {e}"
+                        "Vocabulary generation failed. Check the service configuration and retry."
                     )
 
     # =====================================================
@@ -1992,10 +2035,10 @@ Rules:
 
                 except Exception as exc:
 
-                    # Show actual Azure error
+                    # Do not expose provider response bodies or exception details
                     st.session_state[
                         "inbox_preview_error"
-                    ] = str(exc)
+                    ] = "Azure audio preview failed. Check the service configuration."
 
                     # Then try gTTS fallback
                     fallback_audio = (
@@ -2210,7 +2253,7 @@ Rules:
 
                 if sheet_ok:
 
-                    fetch_sheet_data.clear()
+                    clear_sheet_cache()
 
                     st.session_state[
                         "flash_toast"
@@ -2247,7 +2290,7 @@ Rules:
             except Exception as e:
 
                 st.error(
-                    f"Save failed: {e}"
+                    "Save failed. Check the service configuration and retry."
                 )
 
         # =================================================
@@ -2316,7 +2359,7 @@ def render_flashcard(
         <div style='font-size:18px;
                     font-weight:bold;
                     margin-bottom:10px;'>
-            📚 {display_label}
+            📚 {html.escape(str(display_label))}
             <span style='font-weight:normal;
                          color:#aaa;
                          font-size:14px;'>
@@ -2401,7 +2444,7 @@ def render_flashcard(
 
         st.markdown(
             f"<h1 class='arabic-word' "
-            f"dir='rtl'>{arabic}</h1>",
+            f"dir='rtl'>{html.escape(str(arabic))}</h1>",
             unsafe_allow_html=True
         )
 
@@ -2704,7 +2747,7 @@ dialect explanations.
                 except Exception as ex:
 
                     st.error(
-                        f"S.AI Error: {ex}"
+                        "S.AI request failed. Check the service configuration and retry."
                     )
 
     st.text_area(
@@ -3175,8 +3218,7 @@ with tab5:
             except Exception as exc:
 
                 st.error(
-                    "Azure TTS test failed: "
-                    f"{exc}"
+                    "Azure TTS test failed. Check the service configuration."
                 )
 
     else:
@@ -3195,7 +3237,7 @@ with tab5:
         use_container_width=True
     ):
 
-        fetch_sheet_data.clear()
+        clear_sheet_cache()
 
         st.session_state[
             "current_word"
