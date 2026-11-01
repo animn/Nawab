@@ -22,3 +22,10 @@ def test_responsive_and_keyboard_styles_present():
     assert '@media(max-width:640px)' in STYLE
     assert ':focus-visible' in STYLE and 'min-height:46px' in STYLE
     assert 'lang="ar"' in HERO and 'aria-hidden="true"' in HERO
+
+
+def test_tabs_style_uses_current_semantic_roles():
+    # Streamlit 1.66 tabs are role=tab divs, not BaseWeb buttons.
+    assert '[role="tablist"]' in STYLE
+    assert '[role="tab"][aria-selected="true"]' in STYLE
+    assert '[role="tab"]:focus-visible' in STYLE
