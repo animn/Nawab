@@ -12,6 +12,7 @@ import html
 from urllib.parse import urlsplit
 
 from access_control import require_access, require_authorized
+from ui_design import STYLE, theme_style, HERO, progress_cards, section_heading, empty_state, word_heading, word_translation
 
 # --- Configuration & Keys ---
 st.set_page_config(
@@ -127,45 +128,8 @@ Rules:
 # CSS
 # =========================================================
 
-st.markdown(
-    """
-    <style>
-
-        .block-container {
-            padding-top: 2rem !important;
-            padding-bottom: 1rem !important;
-            max-width: 600px;
-        }
-
-        audio {
-            height: 45px !important;
-            width: 100% !important;
-            margin-bottom: 0 !important;
-        }
-
-        .arabic-word {
-            text-align: right;
-            font-size: 42px;
-            margin: 0 0 0.5rem 0;
-            line-height: 1.2;
-        }
-
-        .note-preview {
-            font-size: 0.9rem;
-            color: #ddd;
-            border: 1px solid #555;
-            border-radius: 5px;
-            padding: 10px;
-            min-height: 80px;
-            max-height: 150px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-        }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+theme_mode = st.radio("Appearance", ["Light", "Dark"], horizontal=True, key="yalla_theme", help="Choose your reading theme. This choice lasts for this signed-in session.")
+st.markdown(theme_style(theme_mode), unsafe_allow_html=True)
 
 
 # =========================================================
@@ -2354,22 +2318,100 @@ def render_flashcard(
         else "Custom Lesson"
     )
 
-    st.markdown(
-        f"""
-        <div style='font-size:18px;
-                    font-weight:bold;
-                    margin-bottom:10px;'>
-            📚 {html.escape(str(display_label))}
-            <span style='font-weight:normal;
-                         color:#aaa;
-                         font-size:14px;'>
-                (Score: {score}/3)
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(word_heading(display_label, score), unsafe_allow_html=True)
 
+    # =====================================================
+    # FLASHCARD BODY
+    # =====================================================
+
+    with st.container(
+        border=True
+    ):
+
+        st.markdown(
+            f"<h1 class='arabic-word' "
+            f"dir='rtl' lang='ar-KW'>{html.escape(str(arabic))}</h1>",
+            unsafe_allow_html=True
+        )
+
+        st.markdown(word_translation(pronunc, english), unsafe_allow_html=True)
+
+        # First preference:
+        # stored Azure audio
+        audio_bytes = saved_audio
+
+        if isinstance(
+            audio_bytes,
+            memoryview
+        ):
+
+            audio_bytes = (
+                audio_bytes.tobytes()
+            )
+
+        if audio_bytes:
+
+            st.audio(
+                audio_bytes,
+                format="audio/mp3"
+            )
+
+            if audio_provider:
+
+                st.caption(
+                    "Audio: Azure Kuwait voice "
+                    f"({audio_provider})"
+                )
+
+        else:
+
+            # Existing/old words:
+            # gTTS reads TTSText first
+            fallback_audio = (
+                get_audio_bytes(
+                    clean_val(tts_text)
+                    or arabic
+                )
+            )
+
+            if fallback_audio:
+
+                st.audio(
+                    fallback_audio,
+                    format="audio/mp3"
+                )
+
+                st.caption(
+                    "Audio: generic Arabic gTTS fallback "
+                    "using TTSText where available."
+                )
+
+        with st.expander(
+            "Understand the word · explanation & sounds"
+        ):
+
+            if expl:
+
+                st.info(
+                    f"**Explanation:** "
+                    f"{expl}"
+                )
+
+            if l_pronunc:
+
+                st.write(
+                    "**Sound Breakdown:** "
+                    f"{l_pronunc}"
+                )
+
+            if l_eng:
+
+                st.write(
+                    "**Morphology Context:** "
+                    f"{l_eng}"
+                )
+
+    st.caption("How well did you remember this word? Rate it after listening and reviewing.")
     (
         btn_col1,
         btn_col2
@@ -2433,102 +2475,6 @@ def render_flashcard(
             ] = None
 
         st.rerun()
-
-    # =====================================================
-    # FLASHCARD BODY
-    # =====================================================
-
-    with st.container(
-        border=True
-    ):
-
-        st.markdown(
-            f"<h1 class='arabic-word' "
-            f"dir='rtl'>{html.escape(str(arabic))}</h1>",
-            unsafe_allow_html=True
-        )
-
-        # First preference:
-        # stored Azure audio
-        audio_bytes = saved_audio
-
-        if isinstance(
-            audio_bytes,
-            memoryview
-        ):
-
-            audio_bytes = (
-                audio_bytes.tobytes()
-            )
-
-        if audio_bytes:
-
-            st.audio(
-                audio_bytes,
-                format="audio/mp3"
-            )
-
-            if audio_provider:
-
-                st.caption(
-                    "Audio: Azure Kuwait voice "
-                    f"({audio_provider})"
-                )
-
-        else:
-
-            # Existing/old words:
-            # gTTS reads TTSText first
-            fallback_audio = (
-                get_audio_bytes(
-                    clean_val(tts_text)
-                    or arabic
-                )
-            )
-
-            if fallback_audio:
-
-                st.audio(
-                    fallback_audio,
-                    format="audio/mp3"
-                )
-
-                st.caption(
-                    "Audio: generic Arabic gTTS fallback "
-                    "using TTSText where available."
-                )
-
-        display_title = (
-
-            f"{pronunc if pronunc else 'Pronunciation'}"
-            " | "
-            f"{english if english else 'Meaning'}"
-        )
-
-        with st.expander(
-            f"🗣️ {display_title}"
-        ):
-
-            if expl:
-
-                st.info(
-                    f"**Explanation:** "
-                    f"{expl}"
-                )
-
-            if l_pronunc:
-
-                st.write(
-                    "**Sound Breakdown:** "
-                    f"{l_pronunc}"
-                )
-
-            if l_eng:
-
-                st.write(
-                    "**Morphology Context:** "
-                    f"{l_eng}"
-                )
 
     # =====================================================
     # S.AI TUTOR
@@ -2794,9 +2740,7 @@ if (
     ]
 
 
-st.markdown(
-    "## 🇰🇼 Yalla Kuwaiti!"
-)
+st.markdown(HERO, unsafe_allow_html=True)
 
 conn = init_db()
 
@@ -2829,7 +2773,7 @@ except Exception:
 # =========================================================
 
 st.sidebar.header(
-    "Filters"
+    "Your practice"
 )
 
 chapters = [
@@ -2890,11 +2834,14 @@ st.sidebar.progress(
     else 0,
 
     text=(
-        "Fluency: "
+        "Vocabulary mastered: "
         f"{int((mastered / total) * 100) if total else 0}%"
     )
 )
 
+
+st.markdown(progress_cards(practice, learning, mastered), unsafe_allow_html=True)
+st.caption("Your saved vocabulary · mastery means a recall score of 3 or more, not overall language fluency.")
 
 # =========================================================
 # TABS
@@ -2968,6 +2915,8 @@ with tab1:
 
 with tab2:
 
+    st.markdown(section_heading("One word at a time", "Listen, read the meaning, then rate your recall. Use the chapter filter to focus your practice."), unsafe_allow_html=True)
+
     query = (
         base_q
         +
@@ -3026,9 +2975,10 @@ with tab2:
 
     else:
 
-        st.success(
-            "🎉 Section fully mastered!"
-        )
+        if total == 0:
+            st.markdown(empty_state("Your first words start here", "Add a word in Inbox, or check Sync to load your reference vocabulary."), unsafe_allow_html=True)
+        else:
+            st.markdown(empty_state("No practice cards in this selection", "Choose another chapter or revisit your Mastered words."), unsafe_allow_html=True)
 
 
 # =========================================================
@@ -3036,6 +2986,8 @@ with tab2:
 # =========================================================
 
 with tab3:
+
+    st.markdown(section_heading("Build your confidence", "Your lower-scoring words come first. Open a card to revisit the pronunciation, meaning and notes."), unsafe_allow_html=True)
 
     query = (
         base_q
@@ -3062,6 +3014,10 @@ with tab3:
         .fetchall()
     )
 
+    st.caption(f"Showing {min(20, len(rows))} of {len(rows)} words in this selection.")
+    if not rows:
+        st.markdown(empty_state("Nothing here yet", "Try another chapter or add a word in Inbox."), unsafe_allow_html=True)
+
     for w in rows[:20]:
 
         with st.expander(
@@ -3082,6 +3038,8 @@ with tab3:
 # =========================================================
 
 with tab4:
+
+    st.markdown(section_heading("Words you know", "Revisit your mastered vocabulary whenever you want a refresher."), unsafe_allow_html=True)
 
     query = (
         base_q
@@ -3105,6 +3063,10 @@ with tab4:
         )
         .fetchall()
     )
+
+    st.caption(f"Showing {min(20, len(rows))} of {len(rows)} words in this selection.")
+    if not rows:
+        st.markdown(empty_state("Nothing here yet", "Try another chapter or add a word in Inbox."), unsafe_allow_html=True)
 
     for w in rows[:20]:
 
@@ -3251,3 +3213,7 @@ with tab5:
 # =========================================================
 
 conn.close()
+
+
+st.markdown('<div class="yk-footer">Yalla Kuwaiti · Small steps, everyday conversations.</div>', unsafe_allow_html=True)
+
