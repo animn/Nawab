@@ -44,7 +44,6 @@ audio {width:100%;min-height:45px;margin:.3rem 0;}
 .yk-footer {font-size:.78rem;color:#617970;text-align:center;margin:2rem 0 0;}
 @media(max-width:640px) {.block-container{padding:4rem .8rem 3rem;}.yk-hero{padding:1.3rem 1.2rem;border-radius:18px;}.yk-hero h1{font-size:1.85rem;}.yk-wordmark{font-size:2rem;right:1rem;}.yk-stats{gap:.4rem;}.yk-stat{padding:.8rem .65rem;}.yk-stat dd{font-size:1.5rem;}.yk-stat dt{font-size:.72rem;}.arabic-word{font-size:2.6rem;}[role="tab"]{padding:.5rem .65rem;}.yk-meaning{font-size:1.15rem;}}
 @media(prefers-reduced-motion:reduce) {*{scroll-behavior:auto!important;}}
-@media(prefers-color-scheme:dark) {:root{--yk-ink:#e3f0e8;--yk-muted:#acc3b8;--yk-line:#38574c;--yk-surface:#1b3029;}[data-testid="stAppViewContainer"]{background:#14251f;}[data-testid="stSidebar"]{background:#192e25;}.yk-hero{background:linear-gradient(125deg,#233f30,#30382b);border-color:#38574c;}.yk-hero p,.yk-eyebrow{color:#b7cebf;}.yk-wordmark{color:#d4e5cc;}[role="tablist"]{background:#20392d;}[role="tab"]{color:#bdd0c5;}[role="tab"][aria-selected="true"]{background:#345442;color:#fff;}.yk-stat{background:#1b3029;}.yk-pronunciation{color:#accbbc;}.yk-meaning{color:#e3f0e8;}.yk-pill{background:#31503f;color:#dcf1df;}.note-preview{background:#1b3029;}.yk-empty{background:#20372b;color:#c8dbcd;}}
 </style>
 """
 
@@ -74,3 +73,46 @@ def word_heading(chapter, score):
 def word_translation(pronunciation, meaning):
     return f'<p class="yk-pronunciation">{escape(str(pronunciation or ""))}</p><p class="yk-meaning">{escape(str(meaning or ""))}</p>'
 
+
+
+BRIGHT = """
+<style>
+:root {--yk-ink:#133452;--yk-muted:#45617c;--yk-line:#d0e2ed;--yk-surface:#ffffff;--yk-bg:#f1f8ff;--yk-soft:#e1f3ff;--yk-input:#ffffff;--yk-accent:#007e87;}
+[data-testid="stAppViewContainer"]{background:var(--yk-bg);color:var(--yk-ink);}
+[data-testid="stSidebar"]{background:var(--yk-soft);}
+.yk-hero{background:linear-gradient(115deg,#05b7ac,#1374c7);border:0;box-shadow:0 12px 28px #076d8a24;}
+.yk-hero h1,.yk-hero p,.yk-eyebrow{color:#fff;}.yk-wordmark{color:#fff;opacity:.28;font-size:4rem;}
+.yk-stat:nth-child(1){border-top:4px solid #ee9660;}.yk-stat:nth-child(2){border-top:4px solid #4996ed;}.yk-stat:nth-child(3){border-top:4px solid #16b69e;}
+[role="tablist"]{background:var(--yk-soft);border:0;gap:.25rem;}
+[role="tab"]{color:var(--yk-ink);flex-shrink:0;}
+[role="tab"][aria-selected="true"]{background:var(--yk-accent);color:white;box-shadow:0 3px 8px #007d8730;}
+[role="tab"][aria-selected="true"] p,[role="tab"][aria-selected="true"] [data-testid="stMarkdownContainer"]{color:white;}
+.yk-stat,.note-preview{background:var(--yk-surface);}
+.yk-pronunciation,.yk-footer{color:var(--yk-muted);}.yk-meaning{color:var(--yk-ink);}
+.yk-pill{background:var(--yk-soft);color:var(--yk-ink);}
+.yk-empty{background:var(--yk-soft);color:var(--yk-ink);}
+[data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"], [data-testid="stMetricValue"], [data-testid="stMetricLabel"]{color:var(--yk-ink);}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:var(--yk-muted);}
+.stButton button,.stFormSubmitButton button{background:var(--yk-surface);color:var(--yk-ink);border-color:var(--yk-line);}
+.stButton button:hover,.stFormSubmitButton button:hover{background:var(--yk-soft);border-color:var(--yk-accent);color:var(--yk-ink);}
+[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea{background:var(--yk-input);color:var(--yk-ink);}
+[data-testid="stTextInput"] input::placeholder,[data-testid="stTextArea"] textarea::placeholder{color:var(--yk-muted);opacity:1;}
+[data-testid="stExpander"] details{background:var(--yk-surface);color:var(--yk-ink);border-color:var(--yk-line);}
+[data-testid="stVerticalBlockBorderWrapper"]>div,[data-testid="stVerticalBlockBorderWrapper"]{border-color:var(--yk-line);}
+[data-testid="stRadio"]{background:var(--yk-soft);border-radius:14px;padding:.6rem .9rem;}
+@media(max-width:640px){.block-container{padding-top:3.5rem;}.yk-hero{padding:1.1rem 1.2rem;margin-bottom:.6rem;}.yk-hero h1{font-size:1.85rem;}.yk-hero p{font-size:.9rem;}.yk-stats{margin-top:.7rem;}[role="tablist"]{overflow-x:auto;scrollbar-width:thin;}[role="tab"]{min-width:72px;}.yk-eyebrow{font-size:.63rem;}.yk-wordmark{font-size:2.8rem;}.yk-section{margin-bottom:.7rem;}}
+</style>
+"""
+DARK = """<style>
+:root{--yk-ink:#eef6ff;--yk-muted:#b8ccdf;--yk-line:#36536d;--yk-surface:#18334b;--yk-bg:#0c1d30;--yk-soft:#203f58;--yk-input:#18334b;--yk-accent:#087e87;color-scheme:dark;}
+.yk-hero{background:linear-gradient(115deg,#087c82,#215bb3);box-shadow:0 12px 28px #0003;}
+[data-testid="stHeader"]{background:#0c1d30ed;}
+[data-testid="stAlert"]{color:#eef6ff;}
+[data-testid="stToast"],[role="alertdialog"]{background:#18334b!important;color:#eef6ff!important;border:1px solid #36536d;}
+[role="alertdialog"] p{color:#eef6ff!important;}
+[data-testid="stSelectbox"] [role="combobox"], [data-testid="stSelectbox"] button{background:#18334b;color:#eef6ff;}
+</style>"""
+
+def theme_style(mode):
+    """Explicit in-app choice, never inferred from an OS setting."""
+    return STYLE + BRIGHT + (DARK if mode == "Dark" else "")

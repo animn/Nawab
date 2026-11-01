@@ -12,7 +12,7 @@ import html
 from urllib.parse import urlsplit
 
 from access_control import require_access, require_authorized
-from ui_design import STYLE, HERO, progress_cards, section_heading, empty_state, word_heading, word_translation
+from ui_design import STYLE, theme_style, HERO, progress_cards, section_heading, empty_state, word_heading, word_translation
 
 # --- Configuration & Keys ---
 st.set_page_config(
@@ -128,7 +128,8 @@ Rules:
 # CSS
 # =========================================================
 
-st.markdown(STYLE, unsafe_allow_html=True)
+theme_mode = st.radio("Appearance", ["Light", "Dark"], horizontal=True, key="yalla_theme", help="Choose your reading theme. This choice lasts for this signed-in session.")
+st.markdown(theme_style(theme_mode), unsafe_allow_html=True)
 
 
 # =========================================================
@@ -3215,3 +3216,4 @@ conn.close()
 
 
 st.markdown('<div class="yk-footer">Yalla Kuwaiti · Small steps, everyday conversations.</div>', unsafe_allow_html=True)
+

@@ -29,3 +29,10 @@ def test_tabs_style_uses_current_semantic_roles():
     assert '[role="tablist"]' in STYLE
     assert '[role="tab"][aria-selected="true"]' in STYLE
     assert '[role="tab"]:focus-visible' in STYLE
+
+def test_explicit_dark_mode_has_complete_surface_tokens():
+    from ui_design import theme_style
+    assert '--yk-bg:#0c1d30' in theme_style('Dark')
+    assert '--yk-bg:#0c1d30' not in theme_style('Light')
+    assert 'color-scheme:dark' in theme_style('Dark')
+    assert '[role="tablist"]{overflow-x:auto' in theme_style('Light')
