@@ -27,7 +27,8 @@
           "enableBackgroundRecording": false
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "expo-video"
     ],
     "extra": {
       "eas": {

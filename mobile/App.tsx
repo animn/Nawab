@@ -18,6 +18,12 @@ import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { AudioPractice } from "./src/AudioPractice";
+import { SentenceVideo, VocabularyVideos } from "./src/SentenceVideo";
+import {
+  savedSegmentMatches,
+  sentenceVideoPath,
+  videoSourceKey,
+} from "./src/video";
 import { C } from "./src/theme";
 import {
   Vocab,
@@ -145,6 +151,7 @@ function Nawab() {
   const [url, setUrl] = useState("");
   const [rights, setRights] = useState(false);
   const [editing, setEditing] = useState<Job | null>(null);
+  const [viewing, setViewing] = useState<Job | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [writeSheet, setWriteSheet] = useState(false);
   const [health, setHealth] = useState<any>(null);
@@ -761,9 +768,17 @@ function Nawab() {
                   <Text style={s.muted}>
                     Choose a video or audio file from your device, up to 3
                     minutes. A configured transcription provider drafts timed
-                    sentences; you review the Arabic, English and explanation
-                    before saving. If no provider is configured, you can listen
-                    and transcribe manually.
+                    sentences; review each video clip with its Arabic
+                    transcript, English meaning and explanation before saving.
+                    If no provider is configured, watch or listen and transcribe
+                    manually.
+                  </Text>
+                  <Text style={s.muted}>
+                    Your uploaded video and derived clips are stored on your
+                    connected processing server. When AI processing is
+                    configured and enabled, its provider receives the audio to
+                    draft the transcript, meanings and notes. Only upload
+                    content you have permission to process.
                   </Text>
                   <Text style={s.eyebrow}>
                     1. CONFIRM PERMISSION 2. UPLOAD 3. REVIEW & SAVE
@@ -864,6 +879,13 @@ function Nawab() {
                           : "Duration not yet available"}
                       </Text>
                       <View style={s.row}>
+                        {!!j.segments?.length && (
+                          <Button
+                            label="Play sentences & meanings"
+                            secondary
+                            onPress={() => setViewing(j)}
+                          />
+                        )}
                         {!["queued", "processing", "approved"].includes(
                           j.status,
                         ) && (
@@ -1201,6 +1223,18 @@ function Nawab() {
                     }
                     onPress={() => setRevealed(!revealed)}
                   />
+                  {selected.has_video && token && (
+                    <VocabularyVideos
+                      key={selected.id + "-videos"}
+                      base={api}
+                      token={token}
+                      vocabId={selected.id}
+                      showText={revealed}
+                      onPlay={() =>
+                        setStats((p) => ({ ...p, listens: p.listens + 1 }))
+                      }
+                    />
+                  )}
                   <AudioPractice
                     key={selected.id}
                     source={
@@ -1260,6 +1294,83 @@ function Nawab() {
         </View>
       </Modal>
       <Modal
+        visible={!!viewing}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setViewing(null)}
+      >
+        <View style={s.modalBackdrop}>
+          <View style={[s.modal, { maxWidth: 850 }]}>
+            <ScrollView contentContainerStyle={{ padding: 24, gap: 20 }}>
+              <View style={s.topline}>
+                <Text style={s.sectionTitle}>Sentence clips & meanings</Text>
+                <Button
+                  label="Close"
+                  secondary
+                  onPress={() => setViewing(null)}
+                />
+              </View>
+              <Text style={s.muted}>
+                {viewing?.status === "approved"
+                  ? "Your approved lesson. Each clip is paired with its saved transcript and meaning."
+                  : "Draft lesson. Check the transcript and meaning against each clip before approving."}
+              </Text>
+              {viewing && !viewing.has_video && (
+                <Text style={s.warning}>
+                  This source has no video track. Original sentence audio and
+                  transcript are available below.
+                </Text>
+              )}
+              {viewing?.segments.map((seg, i) => (
+                <View key={videoSourceKey(viewing.id, i, seg)} style={s.card}>
+                  <Text style={s.eyebrow}>
+                    SENTENCE {i + 1} · {seg.start.toFixed(2)}–
+                    {seg.end.toFixed(2)}s
+                  </Text>
+                  {viewing.has_video ? (
+                    <SentenceVideo
+                      base={api}
+                      token={token}
+                      path={sentenceVideoPath(viewing.id, i)}
+                      segment={seg}
+                      onPlay={() =>
+                        setStats((p) => ({ ...p, listens: p.listens + 1 }))
+                      }
+                    />
+                  ) : (
+                    <>
+                      <Text style={s.arabic}>{seg.arabic}</Text>
+                      <Text style={s.wordEnglish}>{seg.english}</Text>
+                      <Text style={s.muted}>{seg.transliteration}</Text>
+                      <Text style={s.muted}>{seg.explanation}</Text>
+                    </>
+                  )}
+                  <AudioPractice
+                    source={{
+                      uri:
+                        api.replace(/\/$/, "") +
+                        `/v1/jobs/${viewing.id}/segments/${i}/audio`,
+                      headers: { Authorization: `Bearer ${token}` },
+                    }}
+                    base={api}
+                    token={token}
+                    arabic={seg.arabic}
+                    onListen={() =>
+                      setStats((p) => ({ ...p, listens: p.listens + 1 }))
+                    }
+                    onRecord={() =>
+                      setStats((p) => ({ ...p, recordings: p.recordings + 1 }))
+                    }
+                    onError={setMessage}
+                  />
+                </View>
+              ))}
+              {!!message && <Text style={s.warning}>{message}</Text>}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+      <Modal
         visible={!!editing}
         transparent
         animationType="slide"
@@ -1294,6 +1405,18 @@ function Nawab() {
                     extracted source, then write only the sentences you can
                     verify and set their timestamps below.
                   </Text>
+                  {editing.has_video && (
+                    <SentenceVideo
+                      key={`${editing.id}-original-video`}
+                      base={api}
+                      token={token}
+                      path={`/v1/jobs/${editing.id}/video`}
+                      label="Full original video"
+                      onPlay={() =>
+                        setStats((p) => ({ ...p, listens: p.listens + 1 }))
+                      }
+                    />
+                  )}
                   <AudioPractice
                     key={`${editing.id}-full-original`}
                     source={{
@@ -1357,7 +1480,29 @@ function Nawab() {
                       }
                     />
                   ))}
-                  {editing && editing.segments[i] && (
+                  {editing?.has_video &&
+                    savedSegmentMatches(editing.segments[i], seg) && (
+                      <SentenceVideo
+                        key={videoSourceKey(editing.id, i, seg)}
+                        base={api}
+                        token={token}
+                        path={sentenceVideoPath(editing.id, i)}
+                        segment={seg}
+                        label="Saved sentence video + meaning"
+                        onPlay={() =>
+                          setStats((p) => ({ ...p, listens: p.listens + 1 }))
+                        }
+                      />
+                    )}
+                  {editing?.has_video &&
+                    !savedSegmentMatches(editing.segments[i], seg) && (
+                      <Text style={s.warning}>
+                        Save your edits to create a video clip matched to this
+                        text and timing. The previous clip is hidden to avoid
+                        mismatching sentences.
+                      </Text>
+                    )}
+                  {editing && savedSegmentMatches(editing.segments[i], seg) && (
                     <AudioPractice
                       key={`${editing.id}-${i}-${editing.segments[i].start}-${editing.segments[i].end}`}
                       source={{
@@ -1408,8 +1553,8 @@ function Nawab() {
                 }
               />
               <Text style={s.warning}>
-                Save timestamp edits before listening to the updated source
-                clip.
+                Save edits before playing the updated source clip. Video is only
+                available when the uploaded source contains video.
               </Text>
               <Button
                 label="Save edits only"

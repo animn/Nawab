@@ -54,6 +54,7 @@ def test_provider_rejects_invalid(segments):
 
 def test_mock_gemini(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake")
+    monkeypatch.setenv("GEMINI_TRANSCRIPTION_MODEL", "test-model")
     audio = tmp_path / "audio.mp3"
     audio.write_bytes(b"audio")
     expected = {
@@ -67,6 +68,11 @@ def test_mock_gemini(tmp_path, monkeypatch):
 
     def respond(request):
         assert request.url.host == "generativelanguage.googleapis.com"
+        config = json.loads(request.content)["generationConfig"]
+        assert config["maxOutputTokens"] == 6000
+        assert not {"temperature", "top_p", "top_k", "topP", "topK"}.intersection(
+            config
+        )
         return httpx.Response(
             200,
             json={
@@ -118,6 +124,7 @@ def test_mock_openai_preserves_transcript(tmp_path, monkeypatch):
 
 def test_ai_disabled_without_explicit_enable(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake")
+    monkeypatch.setenv("GEMINI_TRANSCRIPTION_MODEL", "test-model")
     monkeypatch.setenv("NAWAB_ENABLE_AI", "false")
     assert providers.provider_name() is None
     with pytest.raises(providers.ConfigurationError):

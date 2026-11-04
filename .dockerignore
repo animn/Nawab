@@ -1,0 +1,14 @@
+# Send only the API's build inputs. Never upload local secrets or learning data.
+**
+!Dockerfile.api
+!requirements-api.lock
+!api/
+!api/**
+!scripts/
+!scripts/start-api.sh
+!scripts/backup_runtime.py
+**/__pycache__/
+**/*.pyc
+**/.env*
+**/*.db*
+**/*.sqlite*

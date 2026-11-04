@@ -39,7 +39,14 @@ def init(path):
             existing_api = source.execute(
                 "SELECT 1 FROM sqlite_master WHERE name='nawab_jobs'"
             ).fetchone()
-            if present and (not existing_api or not set(COLUMNS).issubset(present)):
+            video_columns = {
+                r[1] for r in source.execute("PRAGMA table_info(nawab_jobs)")
+            }
+            if present and (
+                not existing_api
+                or not set(COLUMNS).issubset(present)
+                or not {"has_video", "video_metadata"}.issubset(video_columns)
+            ):
                 backup_path = (
                     str(path)
                     + ".pre-api-"
@@ -63,6 +70,11 @@ def init(path):
         CREATE TABLE IF NOT EXISTS nawab_sources (
           job_id TEXT NOT NULL, segment_index INTEGER NOT NULL, vocab_id TEXT NOT NULL,
           start REAL NOT NULL, end REAL NOT NULL, PRIMARY KEY(job_id, segment_index));
+        CREATE TABLE IF NOT EXISTS nawab_video_assets (
+          job_id TEXT NOT NULL, segment_index INTEGER NOT NULL, start REAL NOT NULL,
+          end REAL NOT NULL, path TEXT NOT NULL, metadata TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(job_id, segment_index, start, end));
         CREATE TABLE IF NOT EXISTS nawab_sheet_known (vocab_id TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS nawab_sheet_outbox (
           vocab_id TEXT PRIMARY KEY, operation_id TEXT UNIQUE NOT NULL, status TEXT NOT NULL,
@@ -72,6 +84,14 @@ def init(path):
           transcript TEXT NOT NULL, reference_text TEXT NOT NULL, similarity REAL NOT NULL,
           measurement TEXT NOT NULL, created_at TEXT NOT NULL);
         """)
+
+        job_columns = {r[1] for r in c.execute("PRAGMA table_info(nawab_jobs)")}
+        for name, definition in {
+            "has_video": "INTEGER",
+            "video_metadata": "TEXT",
+        }.items():
+            if name not in job_columns:
+                c.execute(f"ALTER TABLE nawab_jobs ADD COLUMN {name} {definition}")
 
 
 def upsert(c, fields):

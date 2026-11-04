@@ -34,10 +34,14 @@ def provider_name() -> str | None:
         and os.getenv("OPENAI_TRANSCRIPTION_MODEL")
     ):
         return "openai"
-    if chosen == "gemini" and os.getenv("GEMINI_API_KEY"):
+    if (
+        chosen == "gemini"
+        and os.getenv("GEMINI_API_KEY")
+        and os.getenv("GEMINI_TRANSCRIPTION_MODEL")
+    ):
         return "gemini"
     if not chosen:
-        if os.getenv("GEMINI_API_KEY"):
+        if os.getenv("GEMINI_API_KEY") and os.getenv("GEMINI_TRANSCRIPTION_MODEL"):
             return "gemini"
         if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_TRANSCRIPTION_MODEL"):
             return "openai"
@@ -192,7 +196,11 @@ def _openai(audio: Path, client) -> list[dict]:
 
 
 def _gemini(audio: Path, client) -> list[dict]:
-    model = os.getenv("GEMINI_TRANSCRIPTION_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_TRANSCRIPTION_MODEL")
+    if not model:
+        raise ConfigurationError(
+            "Select an explicitly supported Gemini audio model, or use manual transcription."
+        )
     if not re.fullmatch(r"[a-zA-Z0-9._-]+", model):
         raise ConfigurationError("The configured Gemini model name is invalid.")
     response = _post(
@@ -217,7 +225,6 @@ def _gemini(audio: Path, client) -> list[dict]:
             ],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "temperature": 0.1,
                 "maxOutputTokens": 6000,
             },
         },

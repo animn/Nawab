@@ -1,0 +1,37 @@
+# Proposed paid deployment. Do not apply until the owner approves the final
+# recurring charges, hosting destination and secret/access configuration.
+services:
+  - type: web
+    name: nawab-processing
+    runtime: docker
+    repo: https://github.com/animn/Nawab
+    branch: feature/kuwaiti-video-lessons
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    plan: 1c-2g
+    region: frankfurt
+    numInstances: 1
+    autoDeployTrigger: "off"
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 300
+    disk:
+      name: nawab-private-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: NAWAB_DB_PATH
+        value: /data/learning_progress_v8.db
+      - key: NAWAB_MEDIA_DIR
+        value: /data/media
+      - key: NAWAB_REQUIRE_HTTPS
+        value: "true"
+      - key: NAWAB_CORS_ORIGINS
+        value: https://nawab-kuwaiti.anim.chatgpt.site
+      - key: NAWAB_ENABLE_AI
+        value: "false"
+      - key: FORWARDED_ALLOW_IPS
+        sync: false
+      - key: NAWAB_PASSWORD
+        sync: false
+      - key: NAWAB_TOKEN_SECRET
+        sync: false

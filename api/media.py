@@ -399,6 +399,191 @@ def clip_audio(path: str | Path, start: float, end: float, output: str | Path) -
     return output
 
 
+MAX_VIDEO_EDGE = 4096
+MAX_VIDEO_PIXELS = 3840 * 2160
+
+
+def probe_video(path: str | Path) -> dict | None:
+    """Inspect real video, returning None for audio-only files and cover artwork.
+
+    Invalid, oversized, or unsupported inputs raise ValueError. A returned
+    video_stream_index is the absolute input stream index used by clip_video.
+    """
+    path = Path(path).resolve()
+    if not path.is_file() or not 0 < path.stat().st_size <= MAX_BYTES:
+        raise ValueError("Media must be nonempty and no larger than 30 MB.")
+    raw = _run(
+        [
+            _binary("ffprobe"),
+            "-v",
+            "error",
+            "-max_alloc",
+            "268435456",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-format_whitelist",
+            MEDIA_FORMATS,
+            "-show_entries",
+            "format=duration:stream=index,codec_type,width,height,duration:stream_disposition=attached_pic",
+            "-of",
+            "json",
+            str(path),
+        ],
+        timeout=15,
+    )
+    try:
+        info = json.loads(raw)
+        streams = info.get("streams", [])
+        video = next(
+            (
+                s
+                for s in streams
+                if s.get("codec_type") == "video"
+                and not s.get("disposition", {}).get("attached_pic", 0)
+            ),
+            None,
+        )
+        if video is None:
+            return None
+        duration = float(
+            info.get("format", {}).get("duration") or video.get("duration")
+        )
+        width, height = int(video["width"]), int(video["height"])
+        stream_index = int(video["index"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ValueError("The video metadata could not be verified.") from None
+    if not math.isfinite(duration) or not 0 < duration <= MAX_DURATION:
+        raise ValueError("Video must be no longer than 180 seconds.")
+    if (
+        not 2 <= width <= MAX_VIDEO_EDGE
+        or not 2 <= height <= MAX_VIDEO_EDGE
+        or width * height > MAX_VIDEO_PIXELS
+        or not 0 <= stream_index < 32
+    ):
+        raise ValueError(
+            "Video dimensions or stream count exceed the processing limit."
+        )
+    return {
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "has_audio": any(s.get("codec_type") == "audio" for s in streams),
+        "video_stream_index": stream_index,
+    }
+
+
+def clip_video(
+    source: str | Path, start: float, end: float, output: str | Path
+) -> Path:
+    """Encode a bounded, mobile-compatible clip of the actual source video/audio.
+
+    No still images or audio-only inputs are turned into artificial video.
+    """
+    if (
+        not all(math.isfinite(x) for x in (start, end))
+        or not 0 <= start < end <= MAX_DURATION
+    ):
+        raise ValueError("Invalid video segment times.")
+    source, output = Path(source).resolve(), Path(output).resolve()
+    if source == output:
+        raise ValueError("The video clip must not replace its source.")
+    info = probe_video(source)
+    if info is None:
+        raise ValueError(
+            "This source has no actual video stream; audio-only practice is available."
+        )
+    if end > info["duration"] + 0.05:
+        raise ValueError("The video segment extends beyond the source duration.")
+    end = min(end, info["duration"])
+    if end <= start:
+        raise ValueError("The video segment has no duration.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _run(
+            [
+                _binary("ffmpeg"),
+                "-nostdin",
+                "-y",
+                "-v",
+                "error",
+                "-max_alloc",
+                "268435456",
+                "-filter_threads",
+                "1",
+                "-protocol_whitelist",
+                "file,pipe",
+                "-format_whitelist",
+                MEDIA_FORMATS,
+                "-threads",
+                "1",
+                "-ss",
+                str(start),
+                "-i",
+                str(source),
+                "-t",
+                str(end - start),
+                "-map",
+                f"0:{info['video_stream_index']}",
+                "-map",
+                "0:a:0?",
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-sn",
+                "-dn",
+                "-vf",
+                "scale=w='min(iw,if(gte(iw,ih),1280,720))':h='min(ih,if(gte(iw,ih),720,1280))':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+                "-r",
+                "30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "25",
+                "-pix_fmt",
+                "yuv420p",
+                "-threads",
+                "1",
+                "-maxrate",
+                "1500k",
+                "-bufsize",
+                "3000k",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                "-movflags",
+                "+faststart",
+                "-fs",
+                str(MAX_BYTES),
+                "-f",
+                "mp4",
+                str(output),
+            ],
+            timeout=90,
+        )
+        produced = probe_video(output)
+        if (
+            produced is None
+            or produced["duration"] < (end - start) - 0.25
+            or produced["duration"] > (end - start) + 0.25
+            or produced["has_audio"] != info["has_audio"]
+        ):
+            raise ValueError(
+                "The video clip could not be completed within the processing limits."
+            )
+    except BaseException:
+        output.unlink(missing_ok=True)
+        raise
+    return output
+
+
 if __name__ == "__main__":
     try:
         if len(sys.argv) != 4 or sys.argv[1] != "_extract":

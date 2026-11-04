@@ -37,7 +37,7 @@ See `api/README.md` for actual configuration and launch commands. API secrets be
 ## Video learning workflow
 
 1. Upload a video file you have permission to process. Public visibility alone is not permission. Direct-link importing is hidden from the client for now.
-2. The configured API validates file size and duration, then extracts the original audio. Missing hosting or credentials are reported clearly; the client does not pretend processing is available.
+2. The configured API validates file size and duration, retains the original video, and extracts its audio. Real H264/AAC sentence MP4 clips are paired with their saved transcript and meaning, with private playback, seeking, speed controls and looping. Audio-only uploads never receive invented visuals. Missing hosting or credentials are reported clearly; the client does not pretend processing is available.
 3. A configured speech/learning provider produces a draft with sentence timings. Missing configuration or failed processing is shown as such, not replaced with an invented transcript. Manual segment editing remains available.
 4. Review the Arabic, timing, transliteration and English explanation against the original speaker. Kuwaiti ASR and AI explanations can be wrong.
 5. Approve the reviewed lesson, then optionally save to the existing Google Sheet. Uploading a video does not silently write vocabulary to that Sheet.

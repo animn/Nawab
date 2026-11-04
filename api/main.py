@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 import threading
 from contextlib import asynccontextmanager
@@ -38,8 +39,9 @@ DB_PATH = os.getenv("NAWAB_DB_PATH", os.getenv("NAWAB_DB", "learning_progress_v8
 MEDIA_ROOT = Path(os.getenv("NAWAB_MEDIA_DIR", "nawab_media")).resolve()
 _lock = threading.Lock()
 _login_attempts = []
-_processing_slots = threading.Semaphore(2)
-_clip_slots = threading.Semaphore(2)
+_processing_slots = threading.Semaphore(1)
+_clip_slots = _processing_slots
+_video_slots = _processing_slots
 
 
 def now():
@@ -68,6 +70,7 @@ app = FastAPI(title="Nawab 2 API", version="2.0.0", lifespan=lifespan)
 async def https_only(request, call_next):
     if (
         os.getenv("NAWAB_REQUIRE_HTTPS", "true").lower() == "true"
+        and request.url.path != "/health"
         and request.url.scheme != "https"
         and request.url.hostname not in {"localhost", "127.0.0.1", "::1", "testserver"}
     ):
@@ -215,12 +218,24 @@ def login(data: Login):
 @app.get("/v1/vocab", dependencies=[Depends(require_auth)])
 def vocab():
     with db.connect(DB_PATH) as c:
+        # Discover existing approved videos after upgrade even when the client opens
+        # vocabulary before its jobs list. Results are saved once; original files stay intact.
+        for legacy in c.execute(
+            "SELECT id FROM nawab_jobs WHERE status='approved' AND has_video IS NULL AND media_path IS NOT NULL"
+        ).fetchall():
+            job(c, legacy["id"])
         rows = c.execute(
             "SELECT id,"
             + ",".join(n for n in db.COLUMNS if n != "audio_mp3")
             + ",audio_mp3 IS NOT NULL AS has_audio FROM vocab ORDER BY chapter,arabic"
         ).fetchall()
-    return [dict(r) for r in rows]
+        video_ids = {
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT s.vocab_id FROM nawab_sources s JOIN nawab_jobs j ON j.id=s.job_id WHERE j.status='approved' AND j.has_video=1"
+            )
+        }
+    return [dict(r, has_video=r["id"] in video_ids) for r in rows]
 
 
 def get_word(c, word_id):
@@ -307,6 +322,26 @@ def job(c, job_id):
         raise HTTPException(404, "Job not found.")
     result = dict(row)
     result["segments"] = json.loads(result["segments"])
+    result["video_metadata"] = (
+        json.loads(result["video_metadata"]) if result.get("video_metadata") else None
+    )
+    # Old jobs retain original files. Probe once lazily, never rewrite their transcript/progress.
+    if (
+        result.get("has_video") is None
+        and result.get("media_path")
+        and Path(result["media_path"]).is_file()
+    ):
+        try:
+            metadata = media.probe_video(Path(result["media_path"]))
+            c.execute(
+                "UPDATE nawab_jobs SET has_video=?,video_metadata=? WHERE id=?",
+                (bool(metadata), json.dumps(metadata) if metadata else None, job_id),
+            )
+            result["has_video"] = bool(metadata)
+            result["video_metadata"] = metadata
+        except (ValueError, OSError):
+            pass  # Missing tooling must not hide a previously approved lesson.
+    result["has_video"] = bool(result.get("has_video"))
     return result
 
 
@@ -314,7 +349,17 @@ def public_job(row):
     return {k: v for k, v in row.items() if k not in ("media_path", "audio_path")}
 
 
+def require_disk_space():
+    # Never sacrifice originals or the SQLite database to make room for derived media.
+    if shutil.disk_usage(MEDIA_ROOT).free < 512 * 1024 * 1024 + 2 * media.MAX_BYTES:
+        raise HTTPException(
+            507,
+            "Processing storage is nearly full. At least 512 MiB of free headroom plus media workspace is required. Ask the operator to expand storage; no originals were deleted.",
+        )
+
+
 def new_job(source_url, rights):
+    require_disk_space()
     if not rights:
         raise HTTPException(
             422,
@@ -367,12 +412,28 @@ def _process_job(job_id):
                 return
             item = job(c, job_id)
         directory = MEDIA_ROOT / job_id
+        require_disk_space()
         original = (
             Path(item["media_path"])
             if item["media_path"]
             else media.download_tiktok(item["source_url"], directory)
         )
         update_job(job_id, media_path=str(original))
+        video_metadata = media.probe_video(original)
+        update_job(
+            job_id,
+            media_path=str(original),
+            has_video=bool(video_metadata),
+            video_metadata=json.dumps(video_metadata) if video_metadata else None,
+        )
+        if video_metadata and not video_metadata["has_audio"]:
+            update_job(
+                job_id,
+                duration=video_metadata["duration"],
+                status="needs_configuration",
+                error="The original video has no audio track. Enter verified timestamped captions manually; no speech transcript was invented.",
+            )
+            return
         audio, duration = media.prepare_audio(original, directory)
         update_job(job_id, audio_path=str(audio), duration=duration)
         segments = providers.transcribe(audio)
@@ -386,6 +447,8 @@ def _process_job(job_id):
                 [s.model_dump() for s in validated.segments], ensure_ascii=False
             ),
         )
+    except HTTPException as exc:
+        update_job(job_id, status="failed", error=str(exc.detail))
     except providers.ConfigurationError:
         with db.connect(DB_PATH) as c:
             extracted = bool(job(c, job_id)["audio_path"])
@@ -425,6 +488,7 @@ def create_job(data: JobInput, background: BackgroundTasks):
 
 
 async def save_upload(file, destination):
+    require_disk_space()
     total = 0
     try:
         with destination.open("wb") as out:
@@ -432,6 +496,7 @@ async def save_upload(file, destination):
                 total += len(chunk)
                 if total > media.MAX_BYTES:
                     raise HTTPException(413, "Media limit is 30 MB.")
+                require_disk_space()
                 out.write(chunk)
         if total == 0:
             raise HTTPException(422, "Empty media file.")
@@ -539,6 +604,7 @@ def atomic_clip(source, start, end, output):
     with _clip_slots:
         if output.exists():
             return output
+        require_disk_space()
         temporary = output.with_name(output.stem + "-" + uuid4().hex + ".tmp.mp3")
         try:
             media.clip_audio(source, start, end, temporary)
@@ -565,6 +631,8 @@ def segment_audio(job_id: str, index: int):
     try:
         if not output.exists():
             atomic_clip(Path(item["audio_path"]), seg["start"], seg["end"], output)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(422, "Could not extract segment audio.")
     return FileResponse(output, media_type="audio/mpeg")
@@ -756,6 +824,10 @@ def approve_job(job_id: str, data: Approval):
             ).fetchone()
             if snapshot["audio_path"] and (not existing or not existing[0]):
                 audio_needed[word_id] = (index, seg)
+    # Keep real sentence video assets before committing approval; no external writes occur here.
+    if snapshot["has_video"]:
+        for index, seg in enumerate(snapshot["segments"]):
+            ensure_video_asset(snapshot, index, seg["start"], seg["end"])
     prepared = {}
     for word_id, (index, seg) in audio_needed.items():
         digest = hashlib.sha256(json.dumps(seg).encode()).hexdigest()[:12]
@@ -763,6 +835,8 @@ def approve_job(job_id: str, data: Approval):
         try:
             atomic_clip(Path(snapshot["audio_path"]), seg["start"], seg["end"], target)
             prepared[word_id] = target.read_bytes()
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(
                 422,
@@ -782,7 +856,7 @@ def approve_job(job_id: str, data: Approval):
                 "pronunciation": seg["transliteration"],
                 "english": seg["english"],
                 "explanation": seg["explanation"],
-                "chapter": "TikTok lesson",
+                "chapter": "Video lesson" if snapshot["has_video"] else "Audio lesson",
                 "ttstext": seg["arabic"],
             }
             word_id = hashlib.md5(seg["arabic"].strip().encode()).hexdigest()
@@ -958,3 +1032,115 @@ def source_audio(job_id: str):
     if not item["audio_path"] or not Path(item["audio_path"]).is_file():
         raise HTTPException(404, "Original audio is not available yet.")
     return FileResponse(item["audio_path"], media_type="audio/mpeg")
+
+
+def ensure_video_asset(item, index, start, end):
+    if not item["has_video"] or not item["media_path"]:
+        raise HTTPException(
+            404, "This lesson has no video track. Its original audio remains available."
+        )
+    digest = hashlib.sha256(f"{index}:{start:.9f}:{end:.9f}".encode()).hexdigest()[:24]
+    output = MEDIA_ROOT / item["id"] / f"video-{digest}.mp4"
+    with _video_slots:
+        if not output.is_file():
+            require_disk_space()
+            temporary = output.with_name(output.stem + "-" + uuid4().hex + ".tmp.mp4")
+            try:
+                media.clip_video(Path(item["media_path"]), start, end, temporary)
+                metadata = media.probe_video(temporary)
+                if not metadata:
+                    raise ValueError("No video was produced.")
+                temporary.replace(output)
+            except Exception:
+                raise HTTPException(
+                    422,
+                    "Video clip processing failed. Check the original media and server ffmpeg setup, then retry.",
+                )
+            finally:
+                temporary.unlink(missing_ok=True)
+        else:
+            with db.connect(DB_PATH) as c:
+                existing = c.execute(
+                    "SELECT metadata FROM nawab_video_assets WHERE job_id=? AND segment_index=? AND start=? AND end=?",
+                    (item["id"], index, start, end),
+                ).fetchone()
+            metadata = (
+                json.loads(existing[0]) if existing else media.probe_video(output)
+            )
+        with db.connect(DB_PATH) as c:
+            c.execute(
+                "INSERT OR REPLACE INTO nawab_video_assets(job_id,segment_index,start,end,path,metadata,created_at) VALUES (?,?,?,?,?,?,?)",
+                (
+                    item["id"],
+                    index,
+                    start,
+                    end,
+                    str(output),
+                    json.dumps(metadata),
+                    now(),
+                ),
+            )
+    return output
+
+
+def video_response(path):
+    # Starlette FileResponse implements bounded HTTP Range/206/416 responses and ETags.
+    # Auth is evaluated before every GET, including range requests. No token in URLs.
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/v1/jobs/{job_id}/video", dependencies=[Depends(require_auth)])
+def source_video(job_id: str):
+    with db.connect(DB_PATH) as c:
+        item = job(c, job_id)
+    metadata = item["video_metadata"]
+    if not item["has_video"] or not metadata:
+        raise HTTPException(
+            404, "Original video is unavailable; this may be an audio-only lesson."
+        )
+    return video_response(ensure_video_asset(item, -1, 0, metadata["duration"]))
+
+
+@app.get(
+    "/v1/jobs/{job_id}/segments/{index}/video", dependencies=[Depends(require_auth)]
+)
+def segment_video(job_id: str, index: int):
+    with db.connect(DB_PATH) as c:
+        item = job(c, job_id)
+    if index < 0 or index >= len(item["segments"]):
+        raise HTTPException(404, "Video segment not found.")
+    seg = item["segments"][index]
+    return video_response(ensure_video_asset(item, index, seg["start"], seg["end"]))
+
+
+@app.get("/v1/vocab/{word_id}/videos", dependencies=[Depends(require_auth)])
+def word_videos(word_id: str):
+    result = []
+    with db.connect(DB_PATH) as c:
+        get_word(c, word_id)
+        sources = c.execute(
+            "SELECT s.* FROM nawab_sources s JOIN nawab_jobs j ON j.id=s.job_id WHERE s.vocab_id=? AND j.status='approved' ORDER BY j.created_at,s.segment_index",
+            (word_id,),
+        ).fetchall()
+        for source in sources:
+            item = job(c, source["job_id"])
+            index = source["segment_index"]
+            if not item["has_video"] or index >= len(item["segments"]):
+                continue
+            result.append(
+                {
+                    "job_id": item["id"],
+                    "segment_index": index,
+                    "source_url": item["source_url"],
+                    "video_url": f"/v1/jobs/{item['id']}/segments/{index}/video",
+                    **item["segments"][index],
+                }
+            )
+    return result

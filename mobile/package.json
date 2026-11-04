@@ -19,6 +19,7 @@
     "expo-document-picker": "~14.0.8",
     "expo-status-bar": "~3.0.9",
     "expo-updates": "~29.0.20",
+    "expo-video": "~3.0.16",
     "js-md5": "^0.9.2",
     "papaparse": "^5.7.0",
     "react": "19.1.0",

@@ -4,8 +4,10 @@ WORKDIR /app
 COPY requirements-api.lock .
 RUN pip install --no-cache-dir -r requirements-api.lock
 COPY api ./api
+COPY scripts/start-api.sh ./scripts/start-api.sh
+COPY scripts/backup_runtime.py ./scripts/backup_runtime.py
 RUN useradd --create-home nawab && mkdir /data && chown nawab:nawab /data
 USER nawab
 ENV NAWAB_DB_PATH=/data/learning_progress_v8.db NAWAB_MEDIA_DIR=/data/media
 EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "scripts/start-api.sh"]

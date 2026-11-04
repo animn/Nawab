@@ -8,6 +8,7 @@ export type Vocab = {
   score: number;
   notes: string;
   has_audio?: boolean;
+  has_video?: boolean;
   illustrative?: boolean;
 };
 export type Segment = {
@@ -25,6 +26,13 @@ export type Job = {
   source_url?: string;
   segments: Segment[];
   duration?: number;
+  has_video?: boolean;
+  video_metadata?: {
+    duration: number;
+    width: number;
+    height: number;
+    has_audio?: boolean;
+  } | null;
   created_at?: string;
 };
 export type Practice = {

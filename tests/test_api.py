@@ -47,6 +47,7 @@ def fake_media(monkeypatch):
 
     monkeypatch.setattr(media, "download_tiktok", download)
     monkeypatch.setattr(media, "prepare_audio", prepare)
+    monkeypatch.setattr(media, "probe_video", lambda p: None)
     monkeypatch.setattr(
         media, "clip_audio", lambda p, start, end, out: out.write_bytes(b"clip")
     )

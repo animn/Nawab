@@ -10,10 +10,10 @@ No credentials are bundled. All `/v1` endpoints, including audio, require Bearer
 - `NAWAB_MEDIA_DIR`: persistent private media directory (default `nawab_media`). Back up this and the database together. Original media, audio and recordings are retained; do not expose the directory as static public files.
 - `NAWAB_PASSWORD`: owner password, at least 12 characters. `NAWAB_TOKEN_SECRET`: random secret, at least 32 characters. Both are required; absent/short configuration fails closed. Supply through your hosting secret manager, never commit them or put them in Expo public variables. Rotating the token secret invalidates all 12-hour sessions.
 - Serve HTTPS behind a trusted TLS reverse proxy. Only trust forwarded headers from that proxy (`uvicorn --forwarded-allow-ips=<proxy IP>`), never arbitrary clients. Remote HTTP is rejected by default. `NAWAB_REQUIRE_HTTPS=false` is for development on a private LAN only. Loopback is allowed for testing. `NAWAB_CORS_ORIGINS` is a comma-separated explicit web origin allowlist; no CORS origins are allowed by default. Native Expo does not need browser CORS.
-- Enforce a 32 MB request limit and rate limits at the ingress too. App limits are 30 MB per media file, 180 seconds, two processing slots, 25 pending jobs, and 10 login attempts/minute. Use one API process/replica for the durable local SQLite queue. Multiple API processes are not supported: startup deliberately marks interrupted jobs failed.
+- Enforce a 32 MB request limit and rate limits at the ingress too. App limits are 30 MB per media file, 180 seconds, one shared processing/encoding slot, 25 pending jobs, 512 MiB free-disk headroom plus 60 MiB media workspace, and 10 login attempts/minute. Use one API process/replica for the durable local SQLite queue. Multiple API processes are not supported: startup deliberately marks interrupted jobs failed.
 - `SHEET_URL`: public Google Sheets CSV export URL (defaults to the existing app's Sheet). Import is explicit and preserves IDs, notes, scores and saved audio. Run an import before first writeback to recognize already-existing Sheet entries. Only Google HTTPS endpoints are accepted.
 - `SHEET_APPEND_WEBHOOK_URL` and `SHEET_APPEND_SECRET`: optional existing Apps Script append integration. No write occurs until explicit lesson approval with `write_to_sheet:true`. Formula-leading values are escaped. Payload preserves existing `secret` + `entry` contract and adds `operation_id`; `Idempotency-Key` header matches. Webhook should deduplicate by `operation_id` or Arabic MD5. Local persistent outbox prevents duplicate dispatch. A timeout is **uncertain**, never automatically retried; inspect the Sheet before operator reconciliation. Do not delete the outbox to retry blindly. For multiple independent clients/databases, server-side webhook idempotency is mandatory.
-- AI is disabled by default. Explicitly enable `NAWAB_ENABLE_AI=true` and select `NAWAB_AI_PROVIDER=gemini` or `openai`, with the matching server `GEMINI_API_KEY` / `OPENAI_API_KEY`, only after authorizing provider costs and transmission of the source audio. The app itself never enables/configures paid access. Models may be overridden with `GEMINI_TRANSCRIPTION_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `OPENAI_LESSON_MODEL`. Default: Gemini 2.5 Flash. OpenAI has no implicit transcription model default: explicitly set `OPENAI_TRANSCRIPTION_MODEL=whisper-1` only for the compatibility path, with GPT-4.1 mini enrichment. OpenAI has announced whisper-1 retirement February 26, 2027; the current replacement transcription API does not supply equivalent segment timestamps. Prefer configured Gemini or manual transcription, and validate any future timestamp-capable replacement before deployment. See [OpenAI speech-to-text documentation](https://developers.openai.com/api/docs/guides/speech-to-text). Missing/disabled AI leaves extracted audio in `needs_configuration` and accepts manual timestamped text. Generated content always requires review.
+- AI is disabled by default. Explicitly enable `NAWAB_ENABLE_AI=true` and select `NAWAB_AI_PROVIDER=gemini` or `openai`, with the matching server `GEMINI_API_KEY` / `OPENAI_API_KEY`, only after authorizing provider costs and transmission of the source audio. The app itself never enables/configures paid access. Models may be overridden with `GEMINI_TRANSCRIPTION_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `OPENAI_LESSON_MODEL`. Gemini has no implicit model default: `GEMINI_TRANSCRIPTION_MODEL` must explicitly name a currently supported audio-capable model. Without this setting the provider is unconfigured, even if a key exists. Do not select deprecated Gemini 2.5 Flash for new deployments. OpenAI has no implicit transcription model default: explicitly set `OPENAI_TRANSCRIPTION_MODEL=whisper-1` only for the compatibility path, with GPT-4.1 mini enrichment. OpenAI has announced whisper-1 retirement February 26, 2027; the current replacement transcription API does not supply equivalent segment timestamps. Prefer configured Gemini or manual transcription, and validate any future timestamp-capable replacement before deployment. See [OpenAI speech-to-text documentation](https://developers.openai.com/api/docs/guides/speech-to-text). Missing/disabled AI or missing explicit model selection leaves extracted audio in `needs_configuration` and accepts manual timestamped text. Generated content always requires review.
 
 ## Data safety
 
@@ -39,3 +39,45 @@ Speaking practice is **transcript text similarity**, never pronunciation, fluenc
 - `POST /v1/vocab/{id}/practice {transcript}` or multipart `.../practice/recording` with `file`, `transcript`, `rights_confirmed`; `GET /v1/practice/{id}/audio`.
 
 Tests: `python -m pytest tests/test_api*.py -q`. They use synthetic data, mocked providers/Sheets and local ffmpeg media; no paid provider calls or real Sheet writes. Deployment, real TikTok availability and real-provider transcription require separate authorized smoke tests in the hosting environment.
+
+
+## Actual video clips
+
+Video uploads and TikTok videos retain their exact original media file. `has_video` and
+`video_metadata` identify a real video stream, not cover artwork. Audio-only lessons
+continue working and never receive fabricated video. Silent videos can be reviewed
+with manually entered verified captions; speech AI is not invoked on nonexistent audio.
+
+- `GET /v1/jobs/{id}/video`: playable H264/AAC MP4 of the full original.
+- `GET /v1/jobs/{id}/segments/{index}/video`: actual source clip at the saved boundaries.
+- `GET /v1/vocab/{id}/videos`: approved source clips paired with their Arabic transcript,
+  English meaning, transliteration and explanation. `video_url` is relative to this API.
+- `GET /v1/vocab` also returns `has_video`; jobs return `has_video` and
+  `video_metadata` (duration, width, height, has_audio and stream index).
+
+All video and byte-range requests require the same Bearer authentication as audio.
+MP4 responses support HTTP Range/206/416, private no-store caching and seeking.
+No public static directory or credential-bearing URL is created. Browser clients
+must fetch with the authorization header then play a private blob; native players
+may pass authenticated request headers. Save timestamp edits before playback.
+
+Video clips are stored durably in the private media volume and tracked in the
+additive `nawab_video_assets` table. Originals and previous boundary versions are
+not auto-deleted. Approval pre-renders actual sentence video clips outside the SQLite
+write transaction, then rechecks the reviewed snapshot before attaching vocabulary.
+Existing approved jobs are discovered lazily from their retained original files.
+Existing audio, scores, notes, metadata and legacy IDs remain unchanged.
+
+Rendering is limited to one shared heavy operation at a time across extraction,
+audio and video. Inputs must be at most 30 MB, 180 seconds, 4096 pixels on either
+edge and 3840×2160 total pixels. Outputs fit 1280×720 landscape or 720×1280 portrait,
+without upscaling, at 30 fps; H264/AAC, yuv420p, faststart, one decoder/encoder/filter
+thread, 90-second encode timeout and 30 MB output limit. A capped output that would
+truncate the requested interval is rejected, not presented as a complete clip.
+Uploads/encoding reject low storage with HTTP 507 while preserving at least 512 MiB
+headroom plus workspace. No user originals are deleted to free space. Operators
+must monitor and expand storage as retained lessons accumulate.
+
+The unauthenticated `/health` endpoint may be called over internal HTTP for hosting
+health checks and reports only configuration booleans/provider name. Authentication,
+content, audio and video remain HTTPS-only for non-loopback callers by default.

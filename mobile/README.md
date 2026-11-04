@@ -20,6 +20,12 @@ Video uploads require a rights confirmation. Upload is the primary workflow; dir
 
 Native microphone recording and playback use expo-audio. Recording is requested only on tap. Recordings remain local unless the user chooses to save them to the server. Optional server comparison uses the manually entered spoken transcript, not automatic speech recognition and never a pronunciation score. Original source clips are authenticated; web fetches them into temporary blob URLs and releases URLs on unmount. Native device playback/recording requires physical-device testing; production export alone does not certify hardware behavior.
 
+## Sentence video playback
+
+`expo-video ~3.0.16` matches SDK 54 and is included in Expo Go. The Lessons screen opens actual server-generated sentence MP4 clips beside the matching saved Arabic transcript, English meaning, transliteration and explanation. Playback is on demand, with native controls, 0.75×/1×/1.25× speed and looping. Edited or reordered sentences hide stale previews until edits are saved. Approved vocabulary can retrieve all its approved source clips without changing legacy IDs, scores or notes. Audio-only uploads retain their audio/transcript experience and never show fabricated video.
+
+All media remains authenticated. Native players send Bearer headers and use the server's range-capable MP4 route. Web loads a private clip into a temporary blob only when requested, then revokes the URL on close; the browser must download that clip before playback. Closing the player releases its resources. Full original video is available for manual transcription when no segments exist. Backend media processing and a reachable authenticated API are required. Transcript generation/translation still requires the configured provider; this client does not perform or simulate it. Cloud-browser smoke testing used isolated synthetic video/audio, an AI-disabled backend and manually entered test captions: authenticated sentence video rendered and played, speed/loop controls worked, approved vocabulary linked to its clip, audio-only fallback worked, close/dismiss removed players, and a synthetic server note survived reload/sign-in. Existing local vocabulary count remained unchanged. No real video was sent to an AI provider. Physical-device playback, camera orientation and microphone/audio interaction still require native hardware QA.
+
 ## Checks
 
 ```sh
