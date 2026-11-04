@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Nawab · Kuwaiti Arabic",
+    "slug": "nawab-kuwaiti",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "nawab",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.nawab.kuwaiti" },
+    "android": { "package": "com.nawab.kuwaiti" },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Nawab · Kuwaiti Arabic",
+      "description": "Learn the Kuwaiti you actually use. Private vocabulary, listening and recall practice."
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Nawab uses your microphone only when you choose to practice speaking.",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+# Python and local state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+backups/
+media/
+.nawab-data/
+# Expo and dependency caches
+node_modules/
+.expo/
+dist/
+web-build/
+coverage/
+*.log
+.DS_Store
+
+runtime-data/

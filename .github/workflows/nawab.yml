@@ -1,0 +1,42 @@
+name: Nawab mobile and API
+on:
+  push:
+    branches: [feature/kuwaiti-video-lessons]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-api.lock
+      - run: pip install -r requirements-api.lock
+      - run: python -m pytest tests/test_api*.py -q
+      - run: python scripts/verify_legacy_unchanged.py
+      - run: python -m compileall -q api app.py
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx expo export --platform web
+      - run: npx expo export --platform ios --platform android
