@@ -19,6 +19,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-api.lock
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pip install -r requirements-api.lock
       - run: python -m pytest tests/test_api*.py -q
       - run: python scripts/verify_legacy_unchanged.py
