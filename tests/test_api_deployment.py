@@ -52,6 +52,7 @@ def test_render_recipe_keeps_state_and_disables_automatic_activation():
     assert service["branch"] == "feature/kuwaiti-video-lessons"
     assert service["autoDeployTrigger"] == "off"
     assert service["numInstances"] == 1
+    assert "maxShutdownDelaySeconds" not in service  # Render disks do not allow it.
     assert service["disk"]["mountPath"] == "/data"
     assert service["disk"]["sizeGB"] == 5
     variables = {v["key"]: v for v in service["envVars"]}

@@ -13,7 +13,6 @@ services:
     numInstances: 1
     autoDeployTrigger: "off"
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 300
     disk:
       name: nawab-private-data
       mountPath: /data

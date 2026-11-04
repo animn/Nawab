@@ -69,7 +69,7 @@ Provisioning prerequisites:
 7. Select and authorize the AI provider/model and audio transmission. The legacy app expects a Gemini key in its own host's secret store, but this is not proof that an accessible or billable key exists. Moving an existing key into Render is new ongoing access and needs approval.
 8. Validate upload, full/segment MP4 playback including seeking, transcript/meaning review, explicit approval, unauthorized access rejection, restart persistence and backup recovery on the live service before calling processing operational.
 
-Render disks are single-instance, and deployments involving them have downtime. Do not add replicas or a separate worker against this SQLite queue. Preserve the media directory and database together. Automatic disk snapshots are not a substitute for a verified database-native backup.
+Render disks are single-instance, and deployments involving them have downtime. Disk-backed services do not permit a custom shutdown delay; interrupted processing remains visibly failed and can be explicitly retried. Do not add replicas or a separate worker against this SQLite queue. Preserve the media directory and database together. Automatic disk snapshots are not a substitute for a verified database-native backup.
 
 ### AI configuration and cost
 
