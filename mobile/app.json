@@ -6,8 +6,13 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "nawab",
-    "ios": { "supportsTablet": true, "bundleIdentifier": "com.nawab.kuwaiti" },
-    "android": { "package": "com.nawab.kuwaiti" },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nawab.kuwaiti"
+    },
+    "android": {
+      "package": "com.nawab.kuwaiti"
+    },
     "web": {
       "bundler": "metro",
       "output": "single",
@@ -19,10 +24,22 @@
         "expo-audio",
         {
           "microphonePermission": "Nawab uses your microphone only when you choose to practice speaking.",
-          "enableBackgroundRecording": false,
-          "enableBackgroundPlayback": false
+          "enableBackgroundRecording": false
         }
-      ]
-    ]
+      ],
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4e59fcd0-8f9e-41e4-9ee7-16e433467b5c"
+      }
+    },
+    "owner": "anim.gcc1",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/4e59fcd0-8f9e-41e4-9ee7-16e433467b5c"
+    }
   }
 }

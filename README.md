@@ -36,11 +36,11 @@ See `api/README.md` for actual configuration and launch commands. API secrets be
 
 ## Video learning workflow
 
-1. Paste a supported TikTok link and confirm that you have permission to process the media. Public visibility alone is not permission.
-2. Nawab attempts permitted extraction within file-size and duration limits. Private, removed, region-restricted or otherwise unavailable videos require an authorized file upload instead. It does not bypass login, DRM or access controls.
-3. A configured speech/learning provider produces a draft. Missing configuration or failed processing is shown as such, not replaced with an invented transcript. Manual segment editing remains available.
+1. Upload a video file you have permission to process. Public visibility alone is not permission. Direct-link importing is hidden from the client for now.
+2. The configured API validates file size and duration, then extracts the original audio. Missing hosting or credentials are reported clearly; the client does not pretend processing is available.
+3. A configured speech/learning provider produces a draft with sentence timings. Missing configuration or failed processing is shown as such, not replaced with an invented transcript. Manual segment editing remains available.
 4. Review the Arabic, timing, transliteration and English explanation against the original speaker. Kuwaiti ASR and AI explanations can be wrong.
-5. Approve the reviewed lesson, then optionally save to the existing Google Sheet. Importing a link does not silently write vocabulary to that Sheet.
+5. Approve the reviewed lesson, then optionally save to the existing Google Sheet. Uploading a video does not silently write vocabulary to that Sheet.
 6. Loop original sentences, record a reply and practice recall. Transcript similarity is not an acoustic pronunciation score, and cards mastered are not a fluency measurement.
 
 ## Preservation and deployment

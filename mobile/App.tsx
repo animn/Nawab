@@ -429,7 +429,7 @@ function Nawab() {
   const heading: Record<Tab, string> = {
     Today: "A little Kuwaiti. Every day.",
     Vocabulary: "Words that stay with you.",
-    Lessons: "Real moments. Real Kuwaiti.",
+    Lessons: "Your video. Sentence by sentence.",
     Practice: "From knowing to saying.",
     Settings: "Make yourself at home.",
   };
@@ -524,7 +524,7 @@ function Nawab() {
               {tab === "Today"
                 ? "Listen closely. Speak confidently. Build a habit that lasts."
                 : tab === "Lessons"
-                  ? "Turn videos you have permission to use into sentences worth remembering."
+                  ? "Upload a video, review its timed sentences, then keep the phrases you want to learn."
                   : tab === "Vocabulary"
                     ? "Your Inbox → Review → Mastered journey, with your notes intact."
                     : tab === "Practice"
@@ -558,28 +558,28 @@ function Nawab() {
                       SMALL STEPS. REAL CONVERSATIONS.
                     </Text>
                     <Text style={s.heroTitle}>
-                      Your next conversation{`\n`}starts here.
+                      Your video.{`\n`}One sentence at a time.
                     </Text>
                     <Text style={s.heroDescription}>
-                      {vocab.length
-                        ? vocab.length + " phrases ready to explore."
-                        : "Your collection is ready for its first phrases."}
-                      {`\n`}One good sentence is a great place to start.
+                      Bring a video you are allowed to use. Review the Arabic,
+                      meaning and timing before saving your lesson.
+                      {`\n`}
+                      {vocab.length} phrases already in your collection.
                     </Text>
                     <View style={s.row}>
                       <Button
-                        label="Start a quick review  ↗"
+                        label="Upload a video  ↗"
+                        onPress={() => setTab("Lessons")}
+                      />
+                      <Button
+                        secondary
+                        label="Start a quick review"
                         onPress={() =>
                           vocab.length
                             ? open(vocab.find((v) => v.score < 3) || vocab[0])
                             : setTab("Settings")
                         }
                       />
-                      <Pressable onPress={() => setTab("Vocabulary")}>
-                        <Text style={{ color: C.text, padding: 12 }}>
-                          Explore vocabulary
-                        </Text>
-                      </Pressable>
                     </View>
                   </View>
                   <View style={s.heroArt}>
@@ -638,13 +638,14 @@ function Nawab() {
                       <Text style={s.pill}>VIDEO → VOCABULARY</Text>
                     </View>
                     <Text style={s.cardTitle}>
-                      A clip. A conversation. A lesson.
+                      Upload. Review. Make it yours.
                     </Text>
                     <Text style={s.muted}>
-                      Bring a TikTok link or upload your own video. Review the
-                      Arabic, choose your sentences, then save.
+                      Upload a short video or audio file. With your backend and
+                      transcription provider configured, review the draft text,
+                      translations and sentence boundaries before saving.
                     </Text>
-                    <Text style={s.link}>Create a video lesson ↗</Text>
+                    <Text style={s.link}>Upload a video lesson ↗</Text>
                   </Pressable>
                   <Pressable
                     style={[s.card, { flex: 1 }]}
@@ -756,17 +757,17 @@ function Nawab() {
             {tab === "Lessons" && (
               <>
                 <View style={s.card}>
-                  <Text style={s.sectionTitle}>Bring a moment from Kuwait</Text>
+                  <Text style={s.sectionTitle}>Start with your own video</Text>
                   <Text style={s.muted}>
-                    Paste a public TikTok video link. If downloading is
-                    restricted, upload a video or audio file you are allowed to
-                    use. No access controls are bypassed.
+                    Choose a video or audio file from your device, up to 3
+                    minutes. A configured transcription provider drafts timed
+                    sentences; you review the Arabic, English and explanation
+                    before saving. If no provider is configured, you can listen
+                    and transcribe manually.
                   </Text>
-                  <Field
-                    label="TikTok video URL"
-                    value={url}
-                    onChange={setUrl}
-                  />
+                  <Text style={s.eyebrow}>
+                    1. CONFIRM PERMISSION 2. UPLOAD 3. REVIEW & SAVE
+                  </Text>
                   <Pressable
                     accessibilityRole="checkbox"
                     accessibilityState={{ checked: rights }}
@@ -775,27 +776,23 @@ function Nawab() {
                   >
                     <Text style={s.checkbox}>{rights ? "☑" : "☐"}</Text>
                     <Text style={[s.muted, { flex: 1 }]}>
-                      I own this content or have permission to download and
-                      process it.
+                      I own this content or have permission to upload it to my
+                      configured backend and process it.
                     </Text>
                   </Pressable>
                   <View style={s.row}>
                     <Button
-                      label="Create lesson  ↗"
-                      disabled={busy || !rights || !token}
-                      onPress={importURL}
-                    />
-                    <Button
-                      label="Upload video / audio"
-                      secondary
+                      label="Choose video / audio to upload  ↗"
                       disabled={busy || !rights || !token}
                       onPress={upload}
                     />
                   </View>
                   {!token && (
                     <Text style={s.warning}>
-                      Connect your private API in Settings to process videos.
-                      Local practice does not simulate successful imports.
+                      Uploads require your private API connection in Settings.
+                      Automatic text extraction also needs a configured
+                      transcription provider. Local practice cannot process a
+                      video or invent a transcript.
                     </Text>
                   )}
                 </View>
@@ -822,7 +819,7 @@ function Nawab() {
                       Your first real-world lesson awaits.
                     </Text>
                     <Text style={[s.muted, { textAlign: "center" }]}>
-                      Imported clips appear here with their actual processing
+                      Uploaded clips appear here with their actual processing
                       state.{`\n`}Nothing is added to vocabulary until you
                       approve it.
                     </Text>
